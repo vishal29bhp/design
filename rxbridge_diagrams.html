@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>RxBridge — Architecture &amp; Sequence Diagrams</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    padding: 40px;
+    background: #ffffff;
+    color: #1f1f1f;
+    max-width: 900px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  h1 { font-size: 26px; margin-bottom: 4px; }
+  p.sub { color: #555; margin-top: 0; }
+  h2 {
+    font-size: 19px;
+    margin-top: 56px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #e5e5e5;
+  }
+  .diagram-box {
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    padding: 20px;
+    margin: 16px 0 8px 0;
+    overflow: auto;
+    background: #fafafa;
+  }
+  svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+  .mermaid { display: flex; justify-content: center; }
+  .mermaid svg { max-width: none; }
+  .note {
+    font-size: 13px;
+    color: #666;
+    margin-top: 4px;
+  }
+  .why-box {
+    background: #F5F7FA;
+    border-left: 4px solid #3B82F6;
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin: 8px 0 0 0;
+  }
+  .why-box h3 {
+    font-size: 14px;
+    margin: 0 0 10px 0;
+    color: #1E3A8A;
+  }
+  .why-box ul {
+    margin: 0;
+    padding-left: 20px;
+  }
+  .why-box li {
+    font-size: 14px;
+    line-height: 1.55;
+    color: #2b2b2b;
+    margin-bottom: 8px;
+  }
+  .why-box li:last-child { margin-bottom: 0; }
+  .why-box code {
+    background: #E8ECF3;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<h1>RxBridge — Architecture &amp; Sequence Diagrams</h1>
+<p class="sub">Reference sheet for interview prep. Right-click any diagram → "Save image as" (or select and copy) to lift it out individually.</p>
+
+<h2>1. Five-stage patient visit pipeline</h2>
+<div class="diagram-box">
+<svg viewBox="0 0 680 140" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arrow1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g><rect x="40" y="40" width="108" height="56" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="94" y="60" text-anchor="middle" font-size="14" font-weight="600" fill="#004D40">Intake</text><text x="94" y="82" text-anchor="middle" font-size="12" fill="#00695C">Free-text</text></g>
+<line x1="148" y1="68" x2="160" y2="68" stroke="#666" stroke-width="1.5" marker-end="url(#arrow1)"/>
+<g><rect x="160" y="40" width="108" height="56" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="214" y="60" text-anchor="middle" font-size="14" font-weight="600" fill="#004D40">Documents</text><text x="214" y="82" text-anchor="middle" font-size="12" fill="#00695C">PDFs, notes</text></g>
+<line x1="268" y1="68" x2="280" y2="68" stroke="#666" stroke-width="1.5" marker-end="url(#arrow1)"/>
+<g><rect x="280" y="40" width="108" height="56" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="334" y="60" text-anchor="middle" font-size="14" font-weight="600" fill="#004D40">Memory</text><text x="334" y="82" text-anchor="middle" font-size="12" fill="#00695C">History</text></g>
+<line x1="388" y1="68" x2="400" y2="68" stroke="#666" stroke-width="1.5" marker-end="url(#arrow1)"/>
+<g><rect x="400" y="40" width="108" height="56" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="454" y="60" text-anchor="middle" font-size="14" font-weight="600" fill="#004D40">Context</text><text x="454" y="82" text-anchor="middle" font-size="12" fill="#00695C">Pre-visit</text></g>
+<line x1="508" y1="68" x2="520" y2="68" stroke="#666" stroke-width="1.5" marker-end="url(#arrow1)"/>
+<g><rect x="520" y="40" width="108" height="56" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="574" y="60" text-anchor="middle" font-size="14" font-weight="600" fill="#004D40">Summary</text><text x="574" y="82" text-anchor="middle" font-size="12" fill="#00695C">Patient msg</text></g>
+</svg>
+</div>
+<div class="why-box">
+<h3>Why this flow</h3>
+<ul>
+<li>Each stage exists to remove one specific piece of manual work from the consultation: <b>Intake</b> replaces the doctor asking "what brings you in" from scratch, <b>Documents</b> replaces manually reading old prescriptions, <b>Memory</b> replaces flipping through a patient's paper history, <b>Context</b> replaces the doctor doing that synthesis mentally under time pressure, and <b>Summary</b> replaces the patient trying to remember what was said.</li>
+<li>The order is deliberate: intake and documents both feed memory <i>before</i> context is generated, because a pre-consultation brief is only useful if it already reflects the full picture — generating context before memory is populated would just produce a shorter, less useful note.</li>
+<li>Summary is last on purpose — it only fires after the doctor has actually recorded an outcome, so the patient receives what really happened in the visit, not a prediction of it.</li>
+</ul>
+</div>
+
+<h2>2. Layered system architecture</h2>
+<div class="diagram-box">
+<svg viewBox="0 0 680 460" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+<rect x="40" y="40" width="600" height="90" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="60" y="58" font-size="13" font-weight="600" fill="#555">Channels</text>
+<rect x="70" y="64" width="260" height="56" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/>
+<text x="200" y="84" text-anchor="middle" font-size="14" font-weight="600" fill="#3730A3">Clinic assistant app</text>
+<text x="200" y="106" text-anchor="middle" font-size="12" fill="#4C3FBF">Structured intake</text>
+<rect x="350" y="64" width="260" height="56" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/>
+<text x="480" y="84" text-anchor="middle" font-size="14" font-weight="600" fill="#3730A3">WhatsApp / email</text>
+<text x="480" y="106" text-anchor="middle" font-size="12" fill="#4C3FBF">Patient-facing</text>
+
+<line x1="340" y1="130" x2="340" y2="150" stroke="#666" stroke-width="1.5" marker-end="url(#arrow2)"/>
+
+<rect x="40" y="150" width="600" height="74" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="60" y="168" font-size="13" font-weight="600" fill="#555">Agent orchestration</text>
+<rect x="140" y="174" width="400" height="44" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/>
+<text x="340" y="200" text-anchor="middle" font-size="14" font-weight="600" fill="#1E3A8A">6 agents orchestrated by LangGraph</text>
+
+<line x1="340" y1="224" x2="340" y2="244" stroke="#666" stroke-width="1.5" marker-end="url(#arrow2)"/>
+
+<rect x="40" y="244" width="600" height="90" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="60" y="262" font-size="13" font-weight="600" fill="#555">Retrieval &amp; document intelligence</text>
+<rect x="70" y="268" width="260" height="56" rx="8" fill="#FDE8E0" stroke="#E4572E" stroke-width="1.5"/>
+<text x="200" y="288" text-anchor="middle" font-size="14" font-weight="600" fill="#7C2D12">RAG (vector / hybrid)</text>
+<text x="200" y="310" text-anchor="middle" font-size="12" fill="#9A3B1C">Structured+unstructured</text>
+<rect x="350" y="268" width="260" height="56" rx="8" fill="#FDE8E0" stroke="#E4572E" stroke-width="1.5"/>
+<text x="480" y="288" text-anchor="middle" font-size="14" font-weight="600" fill="#7C2D12">Document extraction</text>
+<text x="480" y="310" text-anchor="middle" font-size="12" fill="#9A3B1C">PDFs, handwritten notes</text>
+
+<line x1="340" y1="334" x2="340" y2="354" stroke="#666" stroke-width="1.5" marker-end="url(#arrow2)"/>
+
+<rect x="40" y="354" width="600" height="74" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="60" y="372" font-size="13" font-weight="600" fill="#555">Data &amp; infra (GCP)</text>
+<rect x="58" y="378" width="130" height="44" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/>
+<text x="123" y="404" text-anchor="middle" font-size="13" font-weight="600" fill="#14532D">Firestore</text>
+<rect x="203" y="378" width="130" height="44" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/>
+<text x="268" y="404" text-anchor="middle" font-size="13" font-weight="600" fill="#14532D">Cloud Storage</text>
+<rect x="348" y="378" width="130" height="44" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/>
+<text x="413" y="404" text-anchor="middle" font-size="13" font-weight="600" fill="#14532D">BigQuery</text>
+<rect x="493" y="378" width="130" height="44" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/>
+<text x="558" y="404" text-anchor="middle" font-size="13" font-weight="600" fill="#14532D">Vertex AI</text>
+</svg>
+</div>
+<div class="why-box">
+<h3>Why this flow</h3>
+<ul>
+<li>The layers are separated by <i>rate of change and responsibility</i>, not just for tidiness: channels change fastest (a new messaging channel is just a new adapter), infra changes slowest (Firestore schema, GCP services). Keeping them in separate layers means a channel change never touches an agent, and an agent change never touches infra.</li>
+<li>Agent orchestration sits in its own layer because it's the only layer that needs to reason and make decisions — everything above it is transport, everything below it is storage. That separation is what makes it possible to swap an LLM provider or add a seventh agent without touching the channels or the infra.</li>
+<li>Retrieval sits between orchestration and infra deliberately: agents never query Firestore or the vector store directly — they go through the retrieval layer, so the hybrid-RAG logic (deciding what's structured vs. semantic) lives in one place instead of being duplicated inside every agent.</li>
+</ul>
+</div>
+
+<h2>3. High-level visit sequence</h2>
+<div class="diagram-box mermaid-wrap">
+<pre class="mermaid">
+sequenceDiagram
+  participant CA as Clinic assistant
+  participant IN as Intake agent
+  participant DOC as Document agent
+  participant MEM as Memory agent
+  participant CTX as Context agent
+  participant DR as Doctor
+  participant COM as Comms agent
+  participant PT as Patient
+
+  CA->>IN: Free-text intake
+  CA->>DOC: Upload prescriptions/notes
+  DOC->>MEM: Structured extraction
+  IN->>MEM: Structured intake data
+  MEM->>CTX: Longitudinal history
+  CTX->>DR: Pre-consultation brief
+  DR->>CTX: Consultation outcome
+  CTX->>COM: Visit summary
+  COM->>PT: WhatsApp/email summary
+  PT-->>COM: Feedback (optional)
+</pre>
+</div>
+<div class="why-box">
+<h3>Why this flow</h3>
+<ul>
+<li>Intake and document upload happen independently from the same clinic-assistant interaction, because a patient may bring old prescriptions without needing to say much verbally, or vice versa. Both paths converge on <b>Memory</b> — it's the single place where free-text and document data get reconciled into one patient record, rather than two competing sources of truth reaching the doctor separately.</li>
+<li>Context generation only happens after memory is updated, and the doctor's outcome flows <i>back</i> into context before the summary goes out — that return arrow is what makes this human-in-the-loop rather than fully automated: the system proposes context, the doctor decides, and only the decided outcome gets communicated to the patient.</li>
+<li>Feedback is a dashed, one-way return at the end, not a blocking step — the patient's visit is considered complete once the summary is sent; feedback is a signal for improving the system later, not a gate on anything.</li>
+</ul>
+</div>
+
+<h2>4. Intake agent — low-level sequence</h2>
+<div class="diagram-box mermaid-wrap">
+<pre class="mermaid">
+sequenceDiagram
+  participant CA as Clinic assistant app
+  participant GW as FastAPI gateway
+  participant ORC as LangGraph orchestrator
+  participant INA as IntakeAgent
+  participant LLM as LLM router
+  participant VEC as Vector store
+  participant FS as Firestore
+  participant PS as Pub/Sub
+
+  CA->>GW: POST /api/v1/intake with patient_id, free_text
+  GW->>GW: auth_middleware() then validate_payload()
+  GW->>ORC: graph.invoke(state IntakeState)
+  ORC->>INA: IntakeAgent.process(state)
+  Note over INA: guardrail_check(): PII redaction, prompt-injection filter
+  INA->>LLM: llm_router.generate(prompt, model=cost_tier)
+  Note over LLM: cost-aware routing: Gemini Flash for extraction, Claude for synthesis
+  LLM-->>INA: structured_symptoms.json
+  INA->>VEC: embed_and_upsert(vector, patient_id)
+  INA->>FS: write patients intake record with idempotency_key
+  FS-->>INA: ack
+  INA-->>ORC: return updated_state
+  ORC->>PS: publish intake.completed event
+  Note over ORC,PS: Eventarc decouples stages, document agent triggers async
+  GW-->>CA: 202 Accepted with trace_id
+</pre>
+</div>
+<div class="why-box">
+<h3>Why this flow — and where the structured data actually goes</h3>
+<ul>
+<li><b>Auth and validation happen at the gateway, before the graph is invoked</b> — so <code>IntakeAgent</code> only ever runs on requests that are already known to be legitimate and well-formed. This keeps the agent's own logic focused purely on clinical extraction, not security.</li>
+<li><b>Guardrails run before the LLM call, not after</b> — PII redaction and prompt-injection filtering happen on the raw input first. This matters because once text reaches a third-party LLM API, you can't take it back; filtering has to happen on the way in, not as a check on the way out.</li>
+<li><b>How the structured data is stored:</b> once the LLM returns <code>structured_symptoms.json</code>, it's written to Firestore under a path like <code>patients/{id}/intake/{visit_id}</code> — a structured, queryable record, not a blob of text. The same payload is also embedded and pushed into the vector store via <code>embed_and_upsert()</code>, so the same fact exists in two forms: exact-match structured fields (for things like "list every symptom logged for this patient") and a semantic embedding (for things like "find visits where the patient described something similar to today's complaint").</li>
+<li><b>Why both a structured write and a vector write:</b> this is what lets the memory agent later do hybrid retrieval — pull hard facts straight from Firestore, and pull semantically related history from the vector store — instead of relying on vector search alone, which is weaker at exact recall of structured facts like dates or medication names.</li>
+<li><b>The idempotency key on the Firestore write</b> protects against the same intake being recorded twice if the clinic assistant's app retries a slow request — without it, a flaky network could double-count symptoms in the patient's history.</li>
+<li><b>The handoff out is a publish, not a direct call</b> — <code>ORC</code> publishes <code>intake.completed</code> to Pub/Sub and returns immediately. The memory agent doesn't get triggered here; it's the document agent's completion (or a timeout) that eventually causes memory to pick up both intake and document data together, which is what the next diagram shows.</li>
+</ul>
+</div>
+
+<h2>5. Document agent — low-level sequence</h2>
+<div class="diagram-box mermaid-wrap">
+<pre class="mermaid">
+sequenceDiagram
+  participant CA as Clinic assistant app
+  participant GW as FastAPI gateway
+  participant ORC as LangGraph orchestrator
+  participant DOC as DocumentAgent
+  participant OCR as Vision/OCR model
+  participant LLM as LLM router
+  participant FS as Firestore
+  participant PS as Pub/Sub
+
+  CA->>GW: POST /api/v1/documents upload file
+  GW->>GW: validate_file_type() then virus_scan()
+  GW->>ORC: graph.invoke(state DocumentState)
+  ORC->>DOC: DocumentAgent.process(state)
+  DOC->>OCR: extract_text(image, model=med_gemma)
+  OCR-->>DOC: raw_text plus confidence_score
+  Note over DOC: if confidence_score below threshold, route to human_review_queue()
+  DOC->>LLM: llm_router.generate(prompt=structure_extraction)
+  LLM-->>DOC: structured_medications.json
+  DOC->>FS: write patients documents record
+  FS-->>DOC: ack
+  DOC-->>ORC: return updated_state
+  ORC->>PS: publish document.completed event
+  GW-->>CA: 202 Accepted with trace_id
+</pre>
+</div>
+<div class="why-box">
+<h3>Why this flow</h3>
+<ul>
+<li><b>OCR/vision extraction and structuring are two separate model calls</b>, not one — the OCR model's only job is turning an image into raw text with a confidence score; a separate LLM call then structures that text into typed fields (medication name, dosage, date). Splitting them means a low-confidence OCR result can be caught and handled <i>before</i> a downstream model confidently hallucinates structure on top of garbage text.</li>
+<li><b>The confidence-threshold branch is the most important design decision here:</b> if OCR confidence is below threshold — which happens often with handwriting — the record goes to a <code>human_review_queue()</code> instead of silently entering the patient's structured history. This is the concrete answer to "how do you avoid a misread medication ending up in a patient's record": low-confidence data never reaches memory unreviewed.</li>
+<li><b>The write to Firestore mirrors the intake agent's pattern</b> — same <code>patients/{id}/...</code> structure, same idempotency approach — so the memory agent can query documents and intake data with one consistent access pattern instead of two different schemas.</li>
+<li><b>File validation and a virus scan happen at the gateway</b>, before any model ever sees the upload — a clinic assistant's device is an uncontrolled entry point, so the file is treated as untrusted until it clears both checks.</li>
+</ul>
+</div>
+
+<h2>6. Memory &amp; context agent — low-level sequence</h2>
+<div class="diagram-box mermaid-wrap">
+<pre class="mermaid">
+sequenceDiagram
+  participant PS as Pub/Sub
+  participant ORC as LangGraph orchestrator
+  participant MEM as MemoryAgent
+  participant FS as Firestore
+  participant VEC as Vector store
+  participant CTX as ContextAgent
+  participant LLM as LLM router
+  participant DR as Doctor app
+
+  PS->>ORC: event intake.completed and document.completed
+  ORC->>MEM: MemoryAgent.process(state)
+  MEM->>FS: query_structured_history(patient_id)
+  FS-->>MEM: patient_records list
+  MEM->>VEC: similarity_search(patient_embedding, k=10)
+  VEC-->>MEM: relevant_note_chunks
+  Note over MEM: merge_structured_and_unstructured() hybrid RAG fusion
+  MEM-->>ORC: return longitudinal_history
+  ORC->>CTX: ContextAgent.process(state)
+  CTX->>LLM: llm_router.generate(prompt=context_synthesis, model=high_tier)
+  LLM-->>CTX: pre_consultation_brief
+  CTX->>FS: write patients context record
+  CTX-->>ORC: return updated_state
+  ORC-->>DR: notify_doctor(brief_ready)
+</pre>
+</div>
+<div class="why-box">
+<h3>Why this flow — how structured intake data is actually used here</h3>
+<ul>
+<li><b>The memory agent wakes up on <i>both</i> events</b>, not either one alone — it waits for <code>intake.completed</code> and <code>document.completed</code> (or a timeout if one is missing) so it never generates a partial picture from only half the visit's data.</li>
+<li><b>Two separate reads, then a merge:</b> <code>query_structured_history()</code> pulls the exact structured records that the intake and document agents wrote earlier — symptoms, medications, dates — straight from Firestore. Separately, <code>similarity_search()</code> queries the vector store for semantically related notes from past visits, using the patient's embedding as the query. Neither read alone is enough: the structured read gives you hard facts but misses nuance in free text from prior visits; the vector read gives you semantic recall but is unreliable for exact facts like "which medication, which dose."</li>
+<li><b><code>merge_structured_and_unstructured()</code> is the actual hybrid-RAG step</b> — this is the function to describe in detail if asked "how does your RAG work": it's not one retrieval call, it's two retrieval calls over two different stores, reconciled into a single longitudinal history object before anything gets sent to an LLM.</li>
+<li><b>Context generation uses a stronger, higher-cost model</b> (<code>model=high_tier</code>) than the earlier extraction steps — this is the cost-aware routing decision in practice: cheap models are fine for pulling structured fields out of text, but synthesizing a doctor-facing brief from years of history is the one step where model quality actually changes the output's usefulness, so it gets the better model.</li>
+<li><b>The brief is written to Firestore before the doctor is notified</b>, so it exists as a durable, timestamped record — if a doctor is interrupted mid-review or asks "what did the system tell me last time," the exact brief they saw can be retrieved rather than regenerated (which could produce a slightly different answer).</li>
+</ul>
+</div>
+
+<h2>7. Comms &amp; feedback agent — low-level sequence</h2>
+<div class="diagram-box mermaid-wrap">
+<pre class="mermaid">
+sequenceDiagram
+  participant DR as Doctor app
+  participant ORC as LangGraph orchestrator
+  participant COM as CommsAgent
+  participant LLM as LLM router
+  participant WA as WhatsApp API
+  participant EM as Email service
+  participant FS as Firestore
+  participant PT as Patient
+  participant FB as FeedbackAgent
+
+  DR->>ORC: submit consultation_outcome
+  ORC->>COM: CommsAgent.process(state)
+  COM->>LLM: llm_router.generate(prompt=plain_language_summary)
+  LLM-->>COM: patient_summary_text
+  COM->>COM: render_template(summary, language=patient_lang)
+  COM->>WA: send_message(patient_phone, formatted_message)
+  Note over COM,EM: email is fallback if WhatsApp delivery fails
+  COM->>EM: send(patient_email, formatted_message)
+  COM->>FS: write patients summary_sent record
+  COM-->>ORC: return updated_state
+  PT-->>FB: feedback_webhook(rating, comment)
+  FB->>FS: write patients feedback record
+  FB->>ORC: publish feedback.received event
+</pre>
+</div>
+<div class="why-box">
+<h3>Why this flow</h3>
+<ul>
+<li><b>This stage only starts once the doctor submits an outcome</b> — the comms agent never sends a summary based on the pre-consultation brief alone, because that brief is a prediction, not a record of what was actually discussed or decided. This is the second half of the human-in-the-loop story: the doctor's input is the trigger, not just an input.</li>
+<li><b><code>render_template()</code> runs before sending</b> — the plain-language summary is localized to the patient's preferred language at this step, since the doctor-facing brief and the patient-facing summary are different documents generated for different audiences from the same underlying visit data.</li>
+<li><b>WhatsApp is primary, email is an explicit fallback</b> — reflecting that in the clinics this is built for, WhatsApp delivery is far more reliable for reaching patients than email, but email exists as a safety net so a summary is never silently lost if a WhatsApp send fails.</li>
+<li><b>Feedback comes back through a separate webhook, to a separate agent, published as its own event</b> — deliberately decoupled from the comms agent's send path, so a slow or missing feedback response can never delay or block the visit being marked complete. It's a signal channel, not a dependency.</li>
+</ul>
+</div>
+
+<script type="module">
+  import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'neutral',
+    themeVariables: { fontSize: '16px' },
+    sequence: {
+      actorFontSize: 16,
+      noteFontSize: 15,
+      messageFontSize: 16,
+      boxMargin: 12,
+      actorMargin: 70,
+      messageMargin: 50,
+      height: 55
+    }
+  });
+</script>
+
+</body>
+</html>
