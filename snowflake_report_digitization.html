@@ -39,7 +39,7 @@
 <h1>RxBridge — Snowflake Report Digitization Design</h1>
 <p class="sub">London clinic: backfill of ~100,000 legacy reports (PDF, scans, photos, handwritten) into structured, patient-linked records so paper can be retired. Snowflake is the bulk lane into the same RxBridge pipeline that serves walk-in visits in real time (doctor brief and patient summary) — it feeds that pipeline, it does not replace it.</p>
 
-<div class="warn"><b>Assumptions to confirm before build:</b> the archive is filed by patient folder and the scanning manifest can record each folder's NHS number/MRN (needed for patient-priority, §3); avg 3 pages/report (so ~300k pages); mix ≈ 60% typed/printed PDF, 25% scanned/photographed, 15% handwritten; English plus several London community languages; Snowflake account in the <b>GCP London region</b>, Business Critical edition (private connectivity, customer-managed key option), with UK GDPR data-processing agreements in place; credit figures below are order-of-magnitude and must be checked against the current Snowflake Service Consumption Table and your region's Cortex AI availability.</div>
+<div class="warn"><b>Assumptions to confirm before build:</b> the archive is filed by patient folder and the scanning manifest can record each folder's NHS number/MRN (needed for patient-priority, §3); avg 3 pages/report (so ~300k pages); mix ≈ 60% typed/printed PDF, 25% scanned/photographed, 15% handwritten; English plus several London community languages; Snowflake account in a UK region (AWS London recommended, see §4.1), Business Critical edition (private connectivity, customer-managed key option), with UK GDPR data-processing agreements in place; credit figures below are order-of-magnitude and must be checked against the current Snowflake Service Consumption Table and your region's Cortex AI availability.</div>
 
 <h2>1. Position: Snowflake is a second lane into RxBridge, not a parallel system</h2>
 <div class="why-box">
@@ -48,7 +48,7 @@
 <li><b>Two workloads, two lanes.</b> A walk-in visit is latency-critical: one patient, a clinic assistant at the desk, and a doctor who needs the brief before the consultation starts. Digitising 100k archived reports is throughput- and cost-critical: no human is waiting on any single document. RxBridge's GCP pipeline already solves the first; Snowflake is added to solve the second.</li>
 <li><b>Both lanes meet at the Memory agent.</b> Whether a record came from a walk-in upload (seconds) or from the archive (bulk), it arrives as the same <code>document.completed</code> event with the same schema. Memory, Context and Comms agents — and therefore the doctor's brief and the patient's summary — do not know or care which lane produced a record.</li>
 <li><b>The bulk lane feeds the real-time experience.</b> The value of digitising the archive is that when a walk-in arrives, the brief already contains their history. So the bulk lane must be patient-aware: it takes a priority signal from RxBridge when a patient checks in, and RxBridge tells the doctor how complete the history is (§3).</li>
-<li><b>Data stays in the UK.</b> Snowflake in the GCP London region, next to RxBridge's <code>europe-west2</code> resources, with explicit controls on AI-function cross-region inference (§4).</li>
+<li><b>Data stays in the UK.</b> Snowflake's own documentation shows Cortex AI runs natively in the UK only on AWS London, not GCP London (§4.1). The recommended placement is therefore a Snowflake account on AWS London with cross-region inference disabled, handing off UK-to-UK to RxBridge on GCP <code>europe-west2</code>.</li>
 <li><b>Same quality rule in both lanes:</b> unreviewed low-confidence data never enters a patient's history. The confidence signal is rebuilt for the bulk lane (§9), because Snowflake's parsing doesn't return a per-token OCR confidence score.</li>
 </ul>
 </div>
@@ -92,7 +92,7 @@
 <h3>The contract that makes the lanes interchangeable</h3>
 <ul>
 <li><b>One extraction schema</b> (<code>rx.document.v1</code>, JSON Schema in a shared repo). Both lanes validate against it before writing; a record that fails never leaves the lane.</li>
-<li><b>One set of RCTFC prompts</b> with a <code>prompt_version</code> stamped on every record. Models may differ per lane (see §4, option A vs B), so equivalence is enforced by a <b>shared golden set</b> run in CI against both lanes on any prompt or model change — not by assuming identical models give identical output.</li>
+<li><b>One set of RCTFC prompts</b> with a <code>prompt_version</code> stamped on every record. Models may differ per lane (see §4, options 1–3), so equivalence is enforced by a <b>shared golden set</b> run in CI against both lanes on any prompt or model change — not by assuming identical models give identical output.</li>
 <li><b>Idempotency key = SHA-256 of file + patient_id.</b> If a patient brings to the desk a paper report that the bulk lane already digitised (or the reverse), the second write is a no-op instead of a duplicate medication in history.</li>
 <li><b>Event envelope</b> carries <code>source_lane</code>, <code>review_status</code> (<code>approved</code> only — nothing else is published), <code>confidence_summary</code>, <code>trace_id</code>, <code>prompt_version</code>, <code>model</code>, <code>reviewer_id</code>.</li>
 <li><b>Provenance on every field</b>: file, page, <code>source_quote</code>. A doctor can always click through from a value in the brief to the original scanned page, whichever lane produced it.</li>
@@ -138,7 +138,7 @@ sequenceDiagram
 <h3>Why this flow</h3>
 <ul>
 <li><b>Priority escalation needs a patient key on the paper.</b> Snowflake can only prioritise a patient's reports if it knows which patient each file belongs to <i>before</i> extraction. Paper archives are filed by patient folder, so the scanning manifest must capture the folder's NHS number/MRN per file. Without this, patient-priority is impossible and the lanes can only meet after full backfill. This is the most important operational requirement to agree with the scanning vendor.</li>
-<li><b>Snowflake cannot subscribe to Pub/Sub, so a small Cloud Run bridge sits between.</b> It consumes <code>patient.checked_in</code> and writes to Snowflake's <code>priority_patients</code> table via the SQL API with key-pair auth. A <i>triggered</i> task (runs when the stream has data, not on a fixed schedule) picks priority patients first. The return path is a direct Pub/Sub notification or GCS unload plus Eventarc, so the Memory agent consumes bulk output exactly as it consumes walk-in output.</li>
+<li><b>Snowflake cannot subscribe to Pub/Sub (and its Pub/Sub notification integration is not a safe assumption on a non-GCP account), so a small Cloud Run bridge sits between.</b> It consumes <code>patient.checked_in</code> and writes to Snowflake's <code>priority_patients</code> table via the SQL API with key-pair auth. A <i>triggered</i> task (runs when the stream has data, not on a fixed schedule) picks priority patients first. The return path uses the same bridge: Snowflake writes approved records to an outbox table, the bridge reads them via the SQL API and publishes <code>document.completed</code> to Pub/Sub. This works whichever cloud the Snowflake account runs on, so the Memory agent consumes bulk output exactly as it consumes walk-in output.</li>
 <li><b>History completeness is a safety feature, not a nicety.</b> A brief that silently omits five unprocessed legacy reports reads to a doctor as "no relevant history". The Context agent must show "history completeness: 9 of 14 legacy reports verified, 5 pending / in review" on every brief, and show in-review items as unverified.</li>
 <li><b>Brief v2 is the human-in-the-loop story again.</b> The doctor gets a usable brief immediately and an updated one if legacy results land during the consultation — nothing blocks the visit on bulk processing.</li>
 <li><b>Fallback is the paper itself.</b> During transition the physical folder still exists. If a priority report isn't ready, the assistant scans that specific page at the desk and the real-time lane handles it, with idempotency preventing a later duplicate.</li>
@@ -147,20 +147,40 @@ sequenceDiagram
 </div>
 
 <h2>4. London: residency, legal basis and UK-specific design choices</h2>
+<h3>4.1 What Snowflake's documentation says about UK placements</h3>
+<p style="font-size:13.5px">Source: Snowflake docs pages for Cortex AI model and regional availability, AI_PARSE_DOCUMENT, AI_EXTRACT, cross-region inference and the <code>CORTEX_ENABLED_CROSS_REGION</code> parameter, read on 5 Oct 2026. Availability changes often — re-check before build. Note: an earlier summary of this page listing Claude, Llama, Mistral, OpenAI and Gemini for GCP London does not match the official tables.</p>
+<table>
+<tr><th>Capability</th><th>AWS Europe West 2 (London)</th><th>Azure UK South (London)</th><th>GCP Europe West 2 (London)</th></tr>
+<tr><td><code>AI_PARSE_DOCUMENT</code></td><td><b>Native</b></td><td>Cross-region only (native Azure regions listed: Netherlands, Virginia, Washington)</td><td>Cross-region only (native GCP regions listed: US Central 1, Dammam)</td></tr>
+<tr><td><code>AI_EXTRACT</code> (<code>arctic-extract</code>)</td><td><b>Native</b> (listed under "extended regions"; the AI_EXTRACT function page's region list differs, so verify)</td><td>Cross-region only</td><td>Cross-region only</td></tr>
+<tr><td><code>AI_COMPLETE</code> models</td><td><b>Native: <code>claude-sonnet-4-6</code>, <code>claude-opus-4-6</code></b>. All other models need cross-region inference</td><td>None listed as native</td><td>None listed as native</td></tr>
+<tr><td>Embeddings (<code>arctic-embed-m</code>, <code>multilingual-e5-large</code>)</td><td>Native</td><td>Native</td><td>Native</td></tr>
+<tr><td>Cortex Search</td><td colspan="3">Not covered on the availability page — check the Cortex Search docs for your chosen region.</td></tr>
+</table>
+<div class="why-box">
+<h3>What this means</h3>
+<ul>
+<li><b>AWS London is the only UK region where the whole chain — parse, extract, LLM, embed — runs natively.</b> The natural placement — Snowflake on GCP London beside RxBridge — does not give UK-resident Cortex AI.</li>
+<li><b>Cross-region routing never lands in the UK.</b> The regional routing values reach EU member-state regions (<code>AWS_EU</code>: Frankfurt, Stockholm, Milan, Spain, Ireland, Paris; <code>AZURE_EU</code>), the US, or any region. Commercial GCP accounts outside the US default to <code>DISABLED</code>.</li>
+<li><b>Only two LLMs are native in AWS London</b>, both Claude. Haiku, Sonnet 5, Llama 3.3, Mistral Large 3 and the rest would require cross-region inference. That is enough for extract plus audit, but the cheap-tier model assumed for classification is not available in-region; use <code>claude-sonnet-4-6</code> or a rule-based/embedding classifier and price accordingly.</li>
+<li><b>Document limits to design around:</b> <code>AI_PARSE_DOCUMENT</code> accepts PDF, TIFF, JPEG, PNG, DOCX and others up to 100 MB and 2,000 pages, with client- or server-side stage encryption; it recognises handwriting. <code>AI_EXTRACT</code> allows up to 125 pages per document and 100 questions per call (10 for table extraction).</li>
+</ul>
+</div>
+<h3>4.2 Decisions and controls</h3>
 <table>
 <tr><th>Topic</th><th>Design decision</th></tr>
-<tr><td>Region</td><td>Snowflake account on GCP, London (<code>europe-west2</code>); GCS buckets, Vertex AI and Cloud Run also <code>europe-west2</code>. Confirm the account's region and that Snowflake support/operations access is covered in the data-processing terms.</td></tr>
-<tr><td>AI-function residency</td><td>Cortex model availability varies by region. Cross-region inference can route prompts outside the UK. Keep cross-region inference <b>disabled</b> by default and enable only with an explicit DPIA outcome and transfer mechanism.</td></tr>
-<tr><td>Model hosting: option A</td><td><b>All-Cortex</b> if the required parsing and LLM models are natively available in the London region. Simplest, one governance boundary, lowest ops burden. <b>Status: plausible, not yet confirmed.</b> A secondary summary of Snowflake's regional-availability page lists Claude, Llama, Mistral, OpenAI, Gemini, Arctic and embedding model families for London (GCP <code>europe-west2</code>), which makes a different-family extractor/verifier pair look feasible. It does not name specific models, say whether <code>AI_PARSE_DOCUMENT</code> / <code>AI_EXTRACT</code> run natively, say whether image input is supported, or separate native from cross-region-served models. Treat as unverified until the in-account check below passes.</td></tr>
-<tr><td>Residency proof (spike task)</td><td>With <code>CORTEX_ENABLED_CROSS_REGION = DISABLED</code> on the account, run on 20 real pages: <code>AI_PARSE_DOCUMENT</code> in OCR and LAYOUT modes, <code>AI_COMPLETE</code> with each candidate extractor and verifier model (including an image-input call for handwriting), and the Cortex Search service build. A call that succeeds with cross-region off is served in London; a call that errors for model/region availability means that model is out for option A. Record the result per function and model in the DPIA.</td></tr>
-<tr><td>Model hosting: option B</td><td><b>Snowflake orchestrates, Vertex AI (<code>europe-west2</code>) does the LLM calls</b> through an external access integration. Use if London lacks suitable Cortex models. Bonus: the same models as the walk-in lane, so parity is easier; cost is a second processor in the path and egress controls to maintain.</td></tr>
+<tr><td>Region and placement</td><td>The Snowflake account's cloud and region decides whether Cortex AI runs inside the UK. <b>See the verified availability in 4.1 — GCP London is not a native Cortex region for the functions this design needs.</b> Recommended placement: <b>Option 1 (AWS Europe West 2, London)</b>.</td></tr>
+<tr><td>Option 1 — Snowflake on AWS London (recommended)</td><td>Account in AWS Europe West 2 (London) with <code>CORTEX_ENABLED_CROSS_REGION = DISABLED</code>. Parse (<code>AI_PARSE_DOCUMENT</code> OCR/LAYOUT), <code>AI_EXTRACT</code>, <code>claude-sonnet-4-6</code> (extraction, and image input for handwriting — verify), <code>claude-opus-4-6</code> (audit) and embeddings all run in the UK. Two model families are available natively, so cross-model agreement stays meaningful: Claude vs Snowflake's <code>arctic-extract</code>. Cost: RxBridge is on GCP, so the hand-off is cross-cloud (UK-to-UK) through the Cloud Run bridge (§3); budget for cross-cloud egress, a second cloud's IAM/network and private connectivity or allow-listed egress IPs.</td></tr>
+<tr><td>Option 2 — Snowflake on GCP London, models on Vertex AI</td><td>Snowflake provides stage, orchestration, review UI, gold and audit; the LLM/OCR calls go to Vertex AI in <code>europe-west2</code> through an external access integration (Cortex AI functions unused). Single cloud and the <b>same models as the walk-in lane</b> (easiest parity), all processing in the UK. Cost: loses <code>AI_PARSE_DOCUMENT</code> and <code>AI_EXTRACT</code>; you build OCR, batching, retries, rate-limit handling and token accounting yourself; Snowflake credits no longer meter AI spend.</td></tr>
+<tr><td>Option 3 — Snowflake on GCP London with cross-region inference</td><td>Quickest to build, but prompts and page images are processed outside the UK. There is no UK or GCP-EU routing value: choices are <code>AWS_EU</code> / <code>AZURE_EU</code> (EU member-state regions only), <code>GCP_US</code>, <code>GCP_GLOBAL</code> or <code>ANY_REGION</code>. Payloads are processed transiently and not persisted there, but this is no longer UK-resident. Treat EU routing as a transfer for the DPIA (UK adequacy arrangements for the EEA currently apply — confirm with counsel). Whether a GCP-hosted account may route to <code>AWS_EU</code> is unconfirmed. US or any-region routing needs a UK transfer mechanism and is not recommended for patient documents.</td></tr>
+<tr><td>Residency proof (spike task)</td><td>Whatever the option, prove it in the account with <code>CORTEX_ENABLED_CROSS_REGION = DISABLED</code> on 20 real pages: <code>AI_PARSE_DOCUMENT</code> (OCR and LAYOUT), <code>AI_EXTRACT</code>, <code>AI_COMPLETE</code> with each model including one image-input call, and the Cortex Search build. A call that succeeds is served in-region; an availability error means that function/model is out. Also run <code>SHOW CORTEX BASE MODELS</code> for lifecycle status so no chosen model is near end-of-life. Record results in the DPIA.</td></tr>
 <tr><td>Legal basis</td><td>UK GDPR + Data Protection Act 2018. Health data is special-category (Art. 9): care-provision condition for treatment; clinic is controller, Snowflake and Google are processors under written DPAs; keep a current sub-processor list. A <b>DPIA is mandatory</b> (large-scale health data, new technology) and is a gate before the pilot.</td></tr>
 <tr><td>Clinical safety</td><td>Appoint a Clinical Safety Officer and keep a hazard log (misread dose, wrong-patient link, omitted history). The NHS clinical risk standards (DCB0129 for suppliers, DCB0160 for deploying organisations) are mandatory for NHS-commissioned care and good practice for private clinics — confirm which applies.</td></tr>
 <tr><td>Security baseline</td><td>Cyber Essentials Plus as a minimum; Data Security and Protection Toolkit if the clinic handles NHS-commissioned data; Caldicott-style need-to-know access for reviewers.</td></tr>
 <tr><td>Patient rights</td><td>Subject access requests must be answerable from RAW + GOLD; rectification must flow back to both GOLD and Firestore; update the privacy notice to tell patients their paper records are being digitised.</td></tr>
 <tr><td>Retention and paper destruction</td><td>Follow the NHS Records Management Code of Practice schedule as the reference for retention; use a legal-admissibility standard such as BS 10008 for scan quality and audit trail before paper is destroyed. Shred only after: gold published, audit sample passed, retention check done. Confirm with the clinic's information-governance lead.</td></tr>
 <tr><td>UK clinical data conventions</td><td>Identify patients by <b>NHS number</b> (10 digits, modulus-11 check) first, then name + DOB + postcode. Code medicines to <b>dm+d / SNOMED CT UK</b>, not RxNorm. Dates are <b>day-first</b>. Expect BNF/Latin abbreviations (od, bd, tds, qds, prn, nocte, mane) and mg / microgram units — "mcg" and "µg" are ambiguous in handwriting, so they route to review.</td></tr>
-<tr><td>Languages</td><td>London clinics see many languages (for example Polish, Arabic, Bengali, Gujarati, Urdu, Turkish, Somali). Measure OCR accuracy per language in the pilot. Store the original text as the source of truth; any English rendering is stored separately and labelled machine translation.</td></tr>
+<tr><td>Languages</td><td>London clinics see many languages. <code>AI_PARSE_DOCUMENT</code> is documented as trained for Chinese, English, French, German, Hindi, Italian, Norwegian, Polish, Portuguese, Romanian, Russian, Spanish, Swedish, Turkish and Ukrainian — <b>not Arabic, Bengali, Gujarati, Urdu or Somali</b>, which are common in London. Measure OCR accuracy per language in the pilot and send untrained-language pages to full review by default until measured. Store the original text as the source of truth; any English rendering is stored separately and labelled machine translation.</td></tr>
 </table>
 
 <h2>5. End-to-end pipeline</h2>
@@ -216,7 +236,7 @@ sequenceDiagram
 <rect x="465" y="370" width="180" height="44" rx="8" fill="#FDE8E0" stroke="#E4572E"/><text x="555" y="397" font-weight="600" fill="#7C2D12">Cortex Search service</text>
 <line x1="350" y1="424" x2="350" y2="442" stroke="#666" stroke-width="1.5" marker-end="url(#a2)"/>
 <rect x="30" y="442" width="640" height="64" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/><text x="50" y="460" text-anchor="start" font-weight="600" fill="#555">RxBridge (GCP) — unchanged consumers</text>
-<rect x="55" y="468" width="190" height="30" rx="8" fill="#DCF5E3" stroke="#22A559"/><text x="150" y="488" font-weight="600" fill="#14532D">Pub/Sub event + GCS unload</text>
+<rect x="55" y="468" width="190" height="30" rx="8" fill="#DCF5E3" stroke="#22A559"/><text x="150" y="488" font-weight="600" fill="#14532D">Outbox + bridge → Pub/Sub</text>
 <rect x="260" y="468" width="190" height="30" rx="8" fill="#DCF5E3" stroke="#22A559"/><text x="355" y="488" font-weight="600" fill="#14532D">Firestore + vector store</text>
 <rect x="465" y="468" width="180" height="30" rx="8" fill="#DCF5E3" stroke="#22A559"/><text x="555" y="488" font-weight="600" fill="#14532D">Memory / Context agents</text>
 </g>
@@ -226,7 +246,7 @@ sequenceDiagram
 <h3>Why this layering</h3>
 <ul>
 <li><b>RAW / CURATED / GOLD schemas with separate roles.</b> Raw files are immutable evidence (needed if a doctor ever disputes a digitised value); curated tables are re-derivable; only GOLD is allowed to feed RxBridge. Privileges follow that: the publish task can read GOLD, nobody but ingestion can write RAW.</li>
-<li><b>Hand-off to RxBridge is a payload plus an event, not a live query.</b> Snowflake unloads approved records as JSON to a GCS bucket in London and publishes a <code>document.completed</code> event (Snowflake's outbound Pub/Sub notification integration, or Eventarc on the bucket as fallback). The Memory agent needs no Snowflake client and no change to its access pattern — it sees the same event the walk-in lane emits.</li>
+<li><b>Hand-off to RxBridge is a payload plus an event, not a live query.</b> Snowflake writes approved records to an outbox table (and optionally unloads JSON to a UK bucket); the Cloud Run bridge publishes the <code>document.completed</code> event to Pub/Sub and marks the row published. The Memory agent needs no Snowflake client and no change to its access pattern — it sees the same event the walk-in lane emits.</li>
 <li><b>Cortex Search sits on GOLD</b> so front-desk staff can find "all reports mentioning metformin for this patient" immediately, even before the doctor-facing agents consume the data.</li>
 </ul>
 </div>
@@ -243,7 +263,7 @@ sequenceDiagram
   participant VAL as Validators
   participant RVW as Review queue
   participant GLD as Gold tables
-  participant GCS as GCS + Eventarc
+  participant GCS as Outbox + Cloud Run bridge
   participant RXB as RxBridge Memory agent
 
   SRC->>STG: PUT file (batch_id, clinic_id, NHS no. from manifest)
@@ -287,7 +307,7 @@ CREATE SCHEMA rx_digitize.curated; -- re-derivable AI output
 CREATE SCHEMA rx_digitize.gold;    -- approved, publishable
 
 CREATE STAGE rx_digitize.raw.reports
-  ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')       -- required for AI_PARSE_DOCUMENT
+  ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')       -- AI_PARSE_DOCUMENT accepts client- or server-side encryption; SSE keeps it simple
   DIRECTORY  = (ENABLE = TRUE);
 
 CREATE STREAM rx_digitize.raw.new_files ON DIRECTORY(@rx_digitize.raw.reports);
@@ -315,7 +335,7 @@ WHERE p.report_id = r.report_id
 <h3>8.3 Classify + extract (Prompts 1 and 2 are stored in a prompt table, versioned)</h3>
 <pre class="sql"><code>SELECT p.report_id,
        AI_COMPLETE(
-         model  =&gt; 'claude-sonnet-4-5',       -- pick per region availability and cost
+         model  =&gt; 'claude-sonnet-4-6',       -- native in AWS London; verify with cross-region DISABLED
          prompt =&gt; (SELECT body FROM rx_digitize.curated.prompts WHERE name='extract' AND active)
                   || '\n\nDOCUMENT_TEXT:\n' || p.doc:content::STRING,
          model_parameters =&gt; {'temperature': 0, 'max_tokens': 2000},
@@ -330,15 +350,17 @@ CREATE TASK rx_digitize.curated.t_parse   WAREHOUSE = wh_ai AFTER t_ingest  AS C
 CREATE TASK rx_digitize.curated.t_extract WAREHOUSE = wh_ai AFTER t_parse   AS CALL curated.sp_extract(5000);
 CREATE TASK rx_digitize.curated.t_verify  WAREHOUSE = wh_ai AFTER t_extract AS CALL curated.sp_verify();
 CREATE TASK rx_digitize.curated.t_publish WAREHOUSE = wh_ingest AFTER t_verify AS
-  CALL gold.sp_publish();   -- COPY INTO @gold.gcs_out (JSON, europe-west2) then notify
+  CALL gold.sp_publish();   -- write approved records to gold.outbox
 
--- outbound event to the same Pub/Sub topic family RxBridge already uses
-CREATE NOTIFICATION INTEGRATION rxbridge_pubsub
-  TYPE = QUEUE DIRECTION = OUTBOUND NOTIFICATION_PROVIDER = GCP_PUBSUB
-  GCP_PUBSUB_TOPIC_NAME = 'projects/PROJECT/topics/document-completed';
--- sp_publish calls SYSTEM$SEND_SNOWFLAKE_NOTIFICATION(...) with:
---   {report_id, patient_id, gcs_uri, source_lane:'bulk', review_status:'approved',
---    schema:'rx.document.v1', prompt_version, model, idempotency_key, trace_id}</code></pre>
+-- outbox pattern: works whichever cloud the Snowflake account runs on
+CREATE TABLE rx_digitize.gold.outbox (
+  event_id STRING DEFAULT UUID_STRING(), payload VARIANT,
+  created_at TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(), published_at TIMESTAMP_LTZ);
+-- sp_publish INSERTs one row per approved record, payload =
+--   {report_id, patient_id, source_lane:'bulk', review_status:'approved', schema:'rx.document.v1',
+--    record, prompt_version, model, idempotency_key, trace_id}
+-- Cloud Run bridge (key-pair auth, UK egress IPs allow-listed) reads unpublished rows via the SQL API,
+-- publishes document.completed to Pub/Sub, then sets published_at (at-least-once; the idempotency key dedupes).</code></pre>
 
 <h3>8.5 Patient-priority lane (walk-in meets archive)</h3>
 <pre class="sql"><code>CREATE TABLE rx_digitize.curated.priority_patients (
@@ -361,7 +383,7 @@ CREATE TASK rx_digitize.curated.t_priority WAREHOUSE = wh_ai_priority
 <tr><th>Signal</th><th>How it is produced</th><th>Used for</th></tr>
 <tr><td>Field confidence (self-reported)</td><td>Extractor returns <code>high|medium|low</code> per field, plus a verbatim <code>source_quote</code></td><td>Weak signal only; never used alone</td></tr>
 <tr><td>Source-quote check</td><td>Deterministic: does <code>source_quote</code> actually appear in parsed text (fuzzy match)?</td><td>Catches hallucinated values — hard flag</td></tr>
-<tr><td>Cross-model agreement</td><td>Verifier model (different vendor/family) re-reads the source and compares field by field</td><td>Primary routing signal to review</td></tr>
+<tr><td>Cross-model agreement</td><td>Verifier model re-reads the source and compares field by field. Where only Claude models are native (AWS London), use <code>claude-opus-4-6</code> for the audit plus an independent <code>AI_EXTRACT</code> (<code>arctic-extract</code>) pass over medication, dose and date fields; same-vendor audit is weaker evidence, so keep the full-review rule for any disagreement</td><td>Primary routing signal to review</td></tr>
 <tr><td>Dictionary validation</td><td>Drug names vs dm+d / SNOMED CT UK (and local formulary), dose and unit sanity ranges, date plausibility, ICD code format</td><td>Medication errors are highest-harm — any miss goes to review</td></tr>
 <tr><td>Patient match score</td><td>Deterministic keys (NHS number with checksum, then MRN, DOB + postcode) then fuzzy name (<code>JAROWINKLER_SIMILARITY</code>); ambiguity never auto-links</td><td>Wrong-patient linkage is the worst failure; below 0.95 → review</td></tr>
 </table>
@@ -438,10 +460,10 @@ where each f = {"value": <string|null>, "confidence": "high|medium|low", "source
 <h2>11. Security, privacy and governance</h2>
 <table>
 <tr><th>Concern</th><th>Control</th></tr>
-<tr><td>Health data at rest / in transit</td><td>London region only; Business Critical edition; customer-managed key (Tri-Secret Secure) if the clinic's information-governance lead requires it; private connectivity to GCS; encrypted stage; network policy limiting access to clinic and RxBridge egress IPs</td></tr>
+<tr><td>Health data at rest / in transit</td><td>UK region only (AWS London per §4.1); Business Critical edition; customer-managed key (Tri-Secret Secure) if the clinic's information-governance lead requires it; private connectivity or allow-listed egress to the bridge; encrypted stage; network policy limiting access to clinic and RxBridge egress IPs</td></tr>
 <tr><td>Least privilege</td><td>Roles: <code>INGEST</code> (write RAW), <code>PIPELINE</code> (CURATED), <code>REVIEWER</code> (queue + page images, no bulk export), <code>PUBLISHER</code> (read GOLD), <code>AUDITOR</code> (read-only incl. access history)</td></tr>
 <tr><td>Field-level protection</td><td>Tag patient identifiers; tag-based masking policies so analysts and non-clinical roles see masked name/phone/ID; row-access policy by <code>clinic_id</code></td></tr>
-<tr><td>AI data handling</td><td>Cortex runs inside Snowflake's boundary only when the model is served in London; cross-region inference stays off unless the DPIA approves it (§4); pin approved models via account-level model allowlist; if option B (Vertex AI in <code>europe-west2</code>), egress is restricted to that endpoint</td></tr>
+<tr><td>AI data handling</td><td><code>CORTEX_ENABLED_CROSS_REGION = DISABLED</code> (verify with <code>SHOW PARAMETERS</code> in CI); only models natively served in the account's UK region are allowed; any change needs DPIA approval (§4); under option 2, egress is restricted to the Vertex AI <code>europe-west2</code> endpoint</td></tr>
 <tr><td>Prompt injection from documents</td><td>Document text always passed as a delimited data block; "ignore instructions" constraint in every prompt; output validated against JSON schema; extraction output is never executed or used to build SQL</td></tr>
 <tr><td>Audit / medico-legal</td><td>Original file retained immutable; each gold value links to <code>report_id, page, source_quote, model, prompt_version, reviewer_id</code>; ACCESS_HISTORY enabled</td></tr>
 <tr><td>Paper destruction</td><td>Shred only after: gold published + sample audit passed + retention check against the NHS Records Management Code schedule and a BS 10008-style scan-quality audit. Digital original kept for the full retention period.</td></tr>
@@ -492,7 +514,7 @@ where each f = {"value": <string|null>, "confidence": "high|medium|low", "source
 <h2>15. Open decisions for the clinic</h2>
 <div class="why-box">
 <ul>
-<li>Option A or B? Model families appear to be offered in London, but specific models, <code>AI_PARSE_DOCUMENT</code>/<code>AI_EXTRACT</code> availability and image input are unconfirmed. Run the residency proof in §4 with cross-region inference disabled; the outcome sets the processor chain in the DPIA.</li>
+<li>Option 1, 2 or 3 (§4)? Recommended: a Snowflake account on AWS London. Is the clinic able to use a Snowflake account on AWS, or is GCP mandatory (then option 2)? Confirm the §4.1 availability in the actual account with the residency proof, and decide who owns the cross-cloud hand-off.</li>
 <li>Will the scanning vendor capture NHS number/MRN per folder in the manifest? Without it, no patient-priority.</li>
 <li>Retention schedule and paper-destruction sign-off owner (information-governance lead).</li>
 <li>Languages and handwriting share in the real archive (drives parse-mode escalation cost and review load).</li>
