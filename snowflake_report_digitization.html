@@ -327,10 +327,11 @@ sequenceDiagram
 </table>
 <div class="warn"><b>Not verified here:</b> Google's documentation pages for BigQuery ML remote-model locations, quotas, object-table behaviour and Vertex batch limits were not reachable from this environment. The BigQuery pricing page was; it confirms the London (<code>europe-west2</code>) location, the SQL inference functions above and that remote-model usage is billed by the underlying service. Effort estimates are judgement, not measurement — validate with the pilot.</div>
 
-<h3>6.4 Recommendation</h3>
+<h3>6.4 Recommendation and decision</h3>
+<div class="warn"><b>Decision (clinic):</b> Snowflake is preferred as the control plane. The design of record is therefore <b>Option 2 (§5)</b>: Snowflake on GCP London, AI as Vertex AI batch in <code>europe-west2</code>, and RxBridge's online Document agent for priority patients. The BigQuery-native comparison is kept for reference and as a fallback.</div>
 <div class="why-box">
 <ul>
-<li><b>Default: BigQuery-native, V1 first (Gemini-direct), add Document AI OCR (V2) if pilot error rates justify it.</b> Same contract, same events, same review queue, one platform.</li>
+<li><b>Neutral default (not chosen): BigQuery-native, V1 first (Gemini-direct), add Document AI OCR (V2) if pilot error rates justify it.</b> Same contract, same events, same review queue, one platform.</li>
 <li><b>Choose Option 2 (Snowflake control plane) only if</b> the clinic mandates Snowflake or wants it as the long-term data platform. Everything in §5 still applies.</li>
 <li><b>Either way, build the shared pieces first</b>: the <code>rx.document.v1</code> schema, the three RCTFC prompts, the idempotency key, the golden set and the history-completeness flag. They are the same for both control planes, so the platform choice stays reversible.</li>
 </ul>
@@ -668,7 +669,7 @@ where each f = {"value": <string|null>, "confidence": "high|medium|low", "source
 <h2>17. Open decisions for the clinic</h2>
 <div class="why-box">
 <ul>
-<li>Since RxBridge is on GCP: decide between the BigQuery-native control plane (recommended default, §6) and Snowflake as control plane (§5). Is Snowflake a hard requirement or a preference? Whichever you pick, confirm the details in §5.4 (UK regional endpoint, batch support, Document AI location) with a 20-page residency proof, and pick V1 (Gemini-direct) or V2 (Document AI OCR + LLM) from pilot error rates.</li>
+<li>Decided: Snowflake as control plane (Option 2, §5). Remaining: confirm the Google-side items in §5.4 (UK regional endpoint, batch support, Document AI location) with a 20-page residency proof, and pick V1 (Gemini-direct) or V2 (Document AI OCR + LLM) from pilot error rates.</li>
 <li>Will the scanning vendor capture NHS number/MRN per folder in the manifest? Without it, no patient-priority.</li>
 <li>Retention schedule and paper-destruction sign-off owner (information-governance lead).</li>
 <li>Languages and handwriting share in the real archive (drives parse-mode escalation cost and review load).</li>
