@@ -185,15 +185,15 @@ sequenceDiagram
 </table>
 
 <h2>5. When Cortex isn't available: Snowflake on GCP + Vertex AI batch (Option 2 in detail)</h2>
-<p>RxBridge runs on GCP, and Cortex's parse, extract and LLM functions are not native in GCP London (§4.1). The efficient answer is to <b>split Snowflake's role</b>: Snowflake stays the control and governance plane (registry, dedupe, validators, review, gold, audit), while the AI work runs as <b>Vertex AI batch jobs in the same GCP region</b>, exchanging files through GCS. Nothing crosses a cloud boundary, nothing leaves the UK, and the AI spend is billed by Google at batch prices instead of through Snowflake credits.</p>
+<p>RxBridge runs on GCP, and Cortex's parse, extract and LLM functions are not native in GCP London (§4.1). The efficient answer is to <b>split Snowflake's role</b>: Snowflake stays the control and governance plane (registry, dedupe, validators, review, gold, audit), while the AI work runs as <b>Vertex AI batch jobs in the same GCP region</b>, exchanging files through GCS (ingestion mechanics in §5.5). Nothing crosses a cloud boundary, nothing leaves the UK, and the AI spend is billed by Google at batch prices instead of through Snowflake credits.</p>
 <div class="diagram-box">
 <svg viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg">
 <defs><marker id="a5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
 <g font-size="12" text-anchor="middle">
 <rect x="10" y="15" width="880" height="95" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/><text x="25" y="33" text-anchor="start" font-weight="600" fill="#555">Snowflake (GCP London) — control and governance plane</text>
-<rect x="25" y="45" width="130" height="50" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="90" y="66" font-weight="600" fill="#004D40">Registry + dedupe</text><text x="90" y="83" font-size="10" fill="#00695C">manifest, NHS no.</text>
+<rect x="25" y="45" width="130" height="50" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="90" y="66" font-weight="600" fill="#004D40">Registry + dedupe</text><text x="90" y="83" font-size="10" fill="#00695C">dir. table + manifest</text>
 <rect x="175" y="45" width="130" height="50" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="240" y="66" font-weight="600" fill="#004D40">Batch builder</text><text x="240" y="83" font-size="10" fill="#00695C">JSONL requests</text>
-<rect x="445" y="45" width="130" height="50" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="510" y="66" font-weight="600" fill="#004D40">Snowpipe ingest</text><text x="510" y="83" font-size="10" fill="#00695C">results to tables</text>
+<rect x="445" y="45" width="130" height="50" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="510" y="66" font-weight="600" fill="#004D40">Snowpipe ingest</text><text x="510" y="83" font-size="10" fill="#00695C">manifest + AI results</text>
 <rect x="595" y="45" width="130" height="50" rx="8" fill="#FDE8E0" stroke="#E4572E" stroke-width="1.5"/><text x="660" y="66" font-weight="600" fill="#7C2D12">Validate + route</text><text x="660" y="83" font-size="10" fill="#9A3B1C">dm+d, NHS no.</text>
 <rect x="745" y="45" width="130" height="50" rx="8" fill="#FDE8E0" stroke="#E4572E" stroke-width="1.5"/><text x="810" y="66" font-weight="600" fill="#7C2D12">Review + gold</text><text x="810" y="83" font-size="10" fill="#9A3B1C">outbox</text>
 <rect x="10" y="135" width="880" height="95" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/><text x="25" y="153" text-anchor="start" font-weight="600" fill="#555">GCP europe-west2 — AI plane and exchange (same region as RxBridge)</text>
@@ -264,6 +264,44 @@ sequenceDiagram
 
 <h3>5.4 Not verified — check before committing</h3>
 <div class="warn">Google's documentation pages for Vertex AI regions, batch prediction and Document AI locations were not reachable from this environment, so these are <b>unverified</b>: (1) the chosen Gemini model is served from a UK regional endpoint (<code>europe-west2</code>) and supports batch prediction there; (2) Document AI processors are available in a UK location — it may only offer EU multi-region, which would be an EU transfer for the DPIA; (3) batch job size limits, quotas and completion-time guarantees; (4) tokens per page for your scan types. Run the same residency proof as §4: a 20-page batch on the regional endpoint, confirm the job location, and record it in the DPIA. Token counts and the regional price premium should be re-measured in the pilot.</div>
+
+<h3>5.5 Ingestion from Google Cloud Storage: Snowpipe and directory tables</h3>
+<p>Everything lands in GCS first, in <code>europe-west2</code>, and Snowflake picks it up from there through GCS event notifications on Pub/Sub. <b>Snowpipe is the ingestion mechanism for everything that is rows of data.</b> The scanned reports themselves are the one exception: Snowpipe runs a <code>COPY</code> into tables and loads structured and semi-structured files (CSV, JSON, Parquet and similar), so it cannot load PDFs, TIFFs or JPEGs. Those stay in GCS and are registered through a directory table that refreshes from the same kind of Pub/Sub event.</p>
+<div class="diagram-box">
+<svg viewBox="0 0 900 250" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="a55" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-size="12" text-anchor="middle">
+<rect x="10" y="12" width="280" height="226" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/><text x="25" y="30" text-anchor="start" font-weight="600" fill="#555">GCS europe-west2</text>
+<rect x="25" y="45" width="250" height="50" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="150" y="66" font-weight="600" fill="#14532D">/scans — PDF, TIFF, JPEG</text><text x="150" y="83" font-size="10" fill="#14532D">unstructured, immutable</text>
+<rect x="25" y="105" width="250" height="50" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="150" y="126" font-weight="600" fill="#14532D">/manifests — CSV / JSON</text><text x="150" y="143" font-size="10" fill="#14532D">folder NHS no., pages, md5</text>
+<rect x="25" y="165" width="250" height="50" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="150" y="186" font-weight="600" fill="#14532D">/batches/output — JSONL</text><text x="150" y="203" font-size="10" fill="#14532D">Vertex AI batch results</text>
+<rect x="330" y="45" width="200" height="50" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="430" y="66" font-weight="600" fill="#3730A3">Pub/Sub topic + sub</text><text x="430" y="83" font-size="10" fill="#4C3FBF">one pull subscription each</text>
+<rect x="330" y="105" width="200" height="50" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="430" y="126" font-weight="600" fill="#3730A3">Pub/Sub topic + sub</text><text x="430" y="143" font-size="10" fill="#4C3FBF">filtered by prefix</text>
+<rect x="330" y="165" width="200" height="50" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="430" y="186" font-weight="600" fill="#3730A3">Pub/Sub topic + sub</text><text x="430" y="203" font-size="10" fill="#4C3FBF">filtered by prefix</text>
+<rect x="575" y="45" width="315" height="50" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="732" y="66" font-weight="600" fill="#004D40">Directory table (AUTO_REFRESH) + stream</text><text x="732" y="83" font-size="10" fill="#00695C">registers files; contents are not loaded</text>
+<rect x="575" y="105" width="315" height="50" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="732" y="126" font-weight="600" fill="#004D40">Snowpipe → raw.scan_manifest</text><text x="732" y="143" font-size="10" fill="#00695C">patient_key, expected pages, md5</text>
+<rect x="575" y="165" width="315" height="50" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="732" y="186" font-weight="600" fill="#004D40">Snowpipe → curated.ai_raw_results</text><text x="732" y="203" font-size="10" fill="#00695C">VARIANT rows, then validators</text>
+<g stroke="#666" stroke-width="1.5" marker-end="url(#a55)"><line x1="275" y1="70" x2="328" y2="70"/><line x1="275" y1="130" x2="328" y2="130"/><line x1="275" y1="190" x2="328" y2="190"/><line x1="530" y1="70" x2="573" y2="70"/><line x1="530" y1="130" x2="573" y2="130"/><line x1="530" y1="190" x2="573" y2="190"/></g>
+</g>
+</svg>
+</div>
+<table>
+<tr><th>Data</th><th>Format</th><th>Mechanism</th><th>Lands in</th></tr>
+<tr><td>Scanned reports</td><td>PDF / TIFF / JPEG, 100 MB and 2,000 pages max per file for parsing</td><td>External GCS stage with directory table and <code>AUTO_REFRESH</code> via a Pub/Sub notification integration; stream on the directory table</td><td><code>report_registry</code> (path, md5/sha256, size); file bytes stay in GCS</td></tr>
+<tr><td>Scanning-vendor manifest</td><td>CSV or JSON: folder NHS number/MRN, page count, md5 per file</td><td><b>Snowpipe auto-ingest</b> from <code>/manifests</code></td><td><code>raw.scan_manifest</code>; joined to registry by file name or md5</td></tr>
+<tr><td>Vertex AI batch results</td><td>JSONL (extraction JSON, verifier verdicts)</td><td><b>Snowpipe auto-ingest</b> from <code>/batches/output</code></td><td><code>curated.ai_raw_results</code> (VARIANT), then parsed into typed tables</td></tr>
+<tr><td>Reference data (dm+d, NHS number rules)</td><td>CSV/JSON</td><td>Snowpipe or scheduled <code>COPY</code></td><td><code>curated.ref_*</code></td></tr>
+</table>
+<div class="why-box">
+<h3>Why it is built this way</h3>
+<ul>
+<li><b>One event path for all three flows.</b> GCS emits object-finalize events to Pub/Sub; each Snowflake consumer has its own topic/subscription filtered by object prefix. Snowflake supports GCS event-driven Snowpipe on any cloud, but only <b>pull</b> subscriptions, not push, and each notification integration points at one subscription.</li>
+<li><b>Out-of-order arrival is normal.</b> A scan can land before its manifest row, and results can land before the registry has the file. The registry therefore holds a file in <code>PENDING_MANIFEST</code> until a manifest row exists, and the batch builder only batches files with a patient key. A nightly reconciliation reports files with no manifest row and manifest rows with no file.</li>
+<li><b>Don't produce tiny files.</b> Snowpipe has a per-file overhead, so have the vendor deliver manifests per delivery batch (not per page) and have Vertex write sharded JSONL per batch job. Confirm file-size guidance and per-file pipe cost in Snowflake's Snowpipe docs and billing before the volume run.</li>
+<li><b>Failure handling is explicit.</b> Monitor <code>SYSTEM$PIPE_STATUS</code> and <code>COPY_HISTORY</code>, route rejected rows to an errors table, alert on a pipe backlog or a quiet pipe, and make loads idempotent (Snowpipe skips files already loaded by name; re-delivered files get a new path or an explicit reload procedure).</li>
+<li><b>Residency and security.</b> Buckets, Pub/Sub and the Snowflake account all in the UK GCP region; access through a storage integration (no keys in Snowflake); bucket retention/object versioning so the scan is immutable evidence; Pub/Sub topics carry object names only, not content.</li>
+</ul>
+</div>
 
 <h2>6. Comparison: Snowflake control plane vs BigQuery-native (GCP)</h2>
 <p>Both designs keep the AI work in Vertex AI in the same UK region and share the same walk-in/bulk contract (§2). The comparison is only about the <b>control plane</b>: where the registry, validators, review, gold records and audit live, and what carries data between stages.</p>
@@ -420,7 +458,7 @@ sequenceDiagram
   participant GCS as Outbox + Cloud Run bridge
   participant RXB as RxBridge Memory agent
 
-  SRC->>STG: PUT file (batch_id, clinic_id, NHS no. from manifest)
+  SRC->>STG: scanner/vendor drops file + manifest in GCS (Pub/Sub event)
   STG->>TSK: stream shows new file
   TSK->>TSK: sha256 dedupe, register report_id
   TSK->>PRS: parse (OCR mode first)
@@ -455,20 +493,30 @@ sequenceDiagram
 
 <h2>10. Snowflake implementation sketch</h2>
 <div class="warn">The parse/classify/extract snippets in 9.2–9.3 show the Cortex path (option 1). Under option 2 (§5) those steps become: the batch builder writes JSONL requests to GCS, Vertex AI batch writes results to GCS, and a Snowpipe loads them into the same <code>curated</code> tables. Registry, dedupe, validators, review, gold, outbox and the priority table are identical in both options.</div>
-<h3>10.1 Ingest and stage</h3>
+<h3>10.1 Ingest from GCS (Snowpipe + directory table)</h3>
 <pre class="sql"><code>CREATE DATABASE rx_digitize;
 CREATE SCHEMA rx_digitize.raw;     -- immutable evidence
 CREATE SCHEMA rx_digitize.curated; -- re-derivable AI output
 CREATE SCHEMA rx_digitize.gold;    -- approved, publishable
 
-CREATE STAGE rx_digitize.raw.reports
-  ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')       -- AI_PARSE_DOCUMENT accepts client- or server-side encryption; SSE keeps it simple
-  DIRECTORY  = (ENABLE = TRUE);
+-- access to the UK buckets (europe-west2); full set-up in section 5.5
+CREATE STORAGE INTEGRATION gcs_rx TYPE = EXTERNAL_STAGE STORAGE_PROVIDER = 'GCS' ENABLED = TRUE
+  STORAGE_ALLOWED_LOCATIONS = ('gcs://rx-raw-london/', 'gcs://rx-batches-london/');
 
-CREATE STREAM rx_digitize.raw.new_files ON DIRECTORY(@rx_digitize.raw.reports);
+-- scans (PDF/TIFF/JPEG) are unstructured: directory table with auto-refresh, files stay in GCS
+CREATE STAGE rx_digitize.raw.scans URL = 'gcs://rx-raw-london/scans/' STORAGE_INTEGRATION = gcs_rx
+  DIRECTORY = (ENABLE = TRUE AUTO_REFRESH = TRUE NOTIFICATION_INTEGRATION = 'GCS_SCANS_NOTIF');
+CREATE STREAM rx_digitize.raw.new_scans ON DIRECTORY(@rx_digitize.raw.scans);
+
+-- vendor manifest and Vertex AI results are structured/semi-structured: Snowpipe auto-ingest
+CREATE PIPE rx_digitize.raw.p_manifest AUTO_INGEST = TRUE INTEGRATION = 'GCS_MANIFEST_NOTIF' AS
+  COPY INTO rx_digitize.raw.scan_manifest FROM @rx_digitize.raw.manifests;
+CREATE PIPE rx_digitize.curated.p_ai_results AUTO_INGEST = TRUE INTEGRATION = 'GCS_RESULTS_NOTIF' AS
+  COPY INTO rx_digitize.curated.ai_raw_results (src, file_name, loaded_at)
+  FROM (SELECT $1, METADATA$FILENAME, CURRENT_TIMESTAMP() FROM @rx_digitize.curated.ai_results);
 
 CREATE TABLE rx_digitize.curated.report_registry (
-  report_id STRING DEFAULT UUID_STRING(), file_path STRING, sha256 STRING,
+  report_id STRING DEFAULT UUID_STRING(), file_path STRING, sha256 STRING, patient_key STRING,
   clinic_id STRING, batch_id STRING, pages INT, status STRING, ingested_at TIMESTAMP_LTZ
 );</code></pre>
 
@@ -659,7 +707,7 @@ where each f = {"value": <string|null>, "confidence": "high|medium|low", "source
 <h3>What to monitor</h3>
 <ul>
 <li><b>Quality:</b> auto-approve rate, reviewer override rate per field, medication-field error rate from weekly blind audits (random 200 auto-approved items), wrong-patient link incidents (target zero).</li>
-<li><b>Flow:</b> files per hour per stage, queue age, dead-letter count, retries — Tasks write failures to an <code>errors</code> table and alert via notification integration.</li>
+<li><b>Flow:</b> Snowpipe backlog and rejected-row counts (<code>SYSTEM$PIPE_STATUS</code>, <code>COPY_HISTORY</code>), manifest-to-scan reconciliation gaps, files per hour per stage, queue age, dead-letter count, retries — Tasks write failures to an <code>errors</code> table and alert via notification integration.</li>
 <li><b>Cross-lane:</b> check-in to legacy-backlog-digitised latency (p50/p95) for priority patients; share of consultations where the brief showed 'pending' items; lane parity diff rate on the shared golden set; duplicate-suppression count from the idempotency key.</li>
 <li><b>Cost:</b> credits per 1,000 reports by step and model; reviewer minutes per report.</li>
 <li><b>Drift:</b> when a clinic changes letterhead/template or a new model version ships, re-run the 300-doc gold set as a regression test before enabling.</li>
