@@ -48,8 +48,8 @@
 <li><b>Two workloads, two lanes.</b> A walk-in visit is latency-critical: one patient, a clinic assistant at the desk, and a doctor who needs the brief before the consultation starts. Digitising 100k archived reports is throughput- and cost-critical: no human is waiting on any single document. RxBridge's GCP pipeline already solves the first; Snowflake is added to solve the second.</li>
 <li><b>Both lanes meet at the Memory agent.</b> Whether a record came from a walk-in upload (seconds) or from the archive (bulk), it arrives as the same <code>document.completed</code> event with the same schema. Memory, Context and Comms agents — and therefore the doctor's brief and the patient's summary — do not know or care which lane produced a record.</li>
 <li><b>The bulk lane feeds the real-time experience.</b> The value of digitising the archive is that when a walk-in arrives, the brief already contains their history. So the bulk lane must be patient-aware: it takes a priority signal from RxBridge when a patient checks in, and RxBridge tells the doctor how complete the history is (§3).</li>
-<li><b>Data stays in the UK.</b> Snowflake's own documentation shows Cortex AI runs natively in the UK only on AWS London, not GCP London (§4.1). The recommended placement is therefore a Snowflake account on AWS London with cross-region inference disabled, handing off UK-to-UK to RxBridge on GCP <code>europe-west2</code>.</li>
-<li><b>Same quality rule in both lanes:</b> unreviewed low-confidence data never enters a patient's history. The confidence signal is rebuilt for the bulk lane (§9), because Snowflake's parsing doesn't return a per-token OCR confidence score.</li>
+<li><b>Data stays in the UK.</b> Snowflake's own documentation shows Cortex AI runs natively in the UK only on AWS London, not GCP London (§4.1). If a non-GCP account is acceptable, that is AWS London with cross-region inference disabled. Because RxBridge is on GCP, the preferred design keeps Snowflake on GCP as the control plane and runs the AI as Vertex AI batch in the same UK region (§5).</li>
+<li><b>Same quality rule in both lanes:</b> unreviewed low-confidence data never enters a patient's history. The confidence signal is rebuilt for the bulk lane (§10), because Snowflake's parsing doesn't return a per-token OCR confidence score.</li>
 </ul>
 </div>
 
@@ -137,6 +137,7 @@ sequenceDiagram
 <div class="why-box">
 <h3>Why this flow</h3>
 <ul>
+<li><b>Under option 2 the priority path is even simpler:</b> the bridge hands that patient's pending files straight to RxBridge's online Document agent (§5), so the real-time lane does the work and Snowflake's batch jobs skip them via the idempotency key. The Snowflake priority table and triggered task below apply to option 1.</li>
 <li><b>Priority escalation needs a patient key on the paper.</b> Snowflake can only prioritise a patient's reports if it knows which patient each file belongs to <i>before</i> extraction. Paper archives are filed by patient folder, so the scanning manifest must capture the folder's NHS number/MRN per file. Without this, patient-priority is impossible and the lanes can only meet after full backfill. This is the most important operational requirement to agree with the scanning vendor.</li>
 <li><b>Snowflake cannot subscribe to Pub/Sub (and its Pub/Sub notification integration is not a safe assumption on a non-GCP account), so a small Cloud Run bridge sits between.</b> It consumes <code>patient.checked_in</code> and writes to Snowflake's <code>priority_patients</code> table via the SQL API with key-pair auth. A <i>triggered</i> task (runs when the stream has data, not on a fixed schedule) picks priority patients first. The return path uses the same bridge: Snowflake writes approved records to an outbox table, the bridge reads them via the SQL API and publishes <code>document.completed</code> to Pub/Sub. This works whichever cloud the Snowflake account runs on, so the Memory agent consumes bulk output exactly as it consumes walk-in output.</li>
 <li><b>History completeness is a safety feature, not a nicety.</b> A brief that silently omits five unprocessed legacy reports reads to a doctor as "no relevant history". The Context agent must show "history completeness: 9 of 14 legacy reports verified, 5 pending / in review" on every brief, and show in-review items as unverified.</li>
@@ -169,9 +170,9 @@ sequenceDiagram
 <h3>4.2 Decisions and controls</h3>
 <table>
 <tr><th>Topic</th><th>Design decision</th></tr>
-<tr><td>Region and placement</td><td>The Snowflake account's cloud and region decides whether Cortex AI runs inside the UK. <b>See the verified availability in 4.1 — GCP London is not a native Cortex region for the functions this design needs.</b> Recommended placement: <b>Option 1 (AWS Europe West 2, London)</b>.</td></tr>
-<tr><td>Option 1 — Snowflake on AWS London (recommended)</td><td>Account in AWS Europe West 2 (London) with <code>CORTEX_ENABLED_CROSS_REGION = DISABLED</code>. Parse (<code>AI_PARSE_DOCUMENT</code> OCR/LAYOUT), <code>AI_EXTRACT</code>, <code>claude-sonnet-4-6</code> (extraction, and image input for handwriting — verify), <code>claude-opus-4-6</code> (audit) and embeddings all run in the UK. Two model families are available natively, so cross-model agreement stays meaningful: Claude vs Snowflake's <code>arctic-extract</code>. Cost: RxBridge is on GCP, so the hand-off is cross-cloud (UK-to-UK) through the Cloud Run bridge (§3); budget for cross-cloud egress, a second cloud's IAM/network and private connectivity or allow-listed egress IPs.</td></tr>
-<tr><td>Option 2 — Snowflake on GCP London, models on Vertex AI</td><td>Snowflake provides stage, orchestration, review UI, gold and audit; the LLM/OCR calls go to Vertex AI in <code>europe-west2</code> through an external access integration (Cortex AI functions unused). Single cloud and the <b>same models as the walk-in lane</b> (easiest parity), all processing in the UK. Cost: loses <code>AI_PARSE_DOCUMENT</code> and <code>AI_EXTRACT</code>; you build OCR, batching, retries, rate-limit handling and token accounting yourself; Snowflake credits no longer meter AI spend.</td></tr>
+<tr><td>Region and placement</td><td>The Snowflake account's cloud and region decides whether Cortex AI runs inside the UK. <b>See the verified availability in 4.1 — GCP London is not a native Cortex region for the functions this design needs.</b> If a non-GCP cloud is acceptable, <b>Option 1 (AWS Europe West 2, London)</b> is simplest. If RxBridge's GCP is mandatory, use <b>Option 2 (§5)</b>.</td></tr>
+<tr><td>Option 1 — Snowflake on AWS London</td><td>Account in AWS Europe West 2 (London) with <code>CORTEX_ENABLED_CROSS_REGION = DISABLED</code>. Parse (<code>AI_PARSE_DOCUMENT</code> OCR/LAYOUT), <code>AI_EXTRACT</code>, <code>claude-sonnet-4-6</code> (extraction, and image input for handwriting — verify), <code>claude-opus-4-6</code> (audit) and embeddings all run in the UK. Two model families are available natively, so cross-model agreement stays meaningful: Claude vs Snowflake's <code>arctic-extract</code>. Cost: RxBridge is on GCP, so the hand-off is cross-cloud (UK-to-UK) through the Cloud Run bridge (§3); budget for cross-cloud egress, a second cloud's IAM/network and private connectivity or allow-listed egress IPs.</td></tr>
+<tr><td>Option 2 — Snowflake on GCP London, AI on Vertex AI batch (recommended when GCP is mandatory; detailed in §5)</td><td>Snowflake provides registry, validators, review UI, gold and audit; the LLM/OCR work runs as Vertex AI batch jobs in <code>europe-west2</code> exchanging files through GCS (Cortex AI functions unused). Single cloud and the <b>same models as the walk-in lane</b> (easiest parity), all processing in the UK. Cost: loses <code>AI_PARSE_DOCUMENT</code> and <code>AI_EXTRACT</code>; you build the batch builder, result ingest and token accounting; Snowflake credits no longer meter AI spend. Google-side region and batch availability still needs verifying (§5.4).</td></tr>
 <tr><td>Option 3 — Snowflake on GCP London with cross-region inference</td><td>Quickest to build, but prompts and page images are processed outside the UK. There is no UK or GCP-EU routing value: choices are <code>AWS_EU</code> / <code>AZURE_EU</code> (EU member-state regions only), <code>GCP_US</code>, <code>GCP_GLOBAL</code> or <code>ANY_REGION</code>. Payloads are processed transiently and not persisted there, but this is no longer UK-resident. Treat EU routing as a transfer for the DPIA (UK adequacy arrangements for the EEA currently apply — confirm with counsel). Whether a GCP-hosted account may route to <code>AWS_EU</code> is unconfirmed. US or any-region routing needs a UK transfer mechanism and is not recommended for patient documents.</td></tr>
 <tr><td>Residency proof (spike task)</td><td>Whatever the option, prove it in the account with <code>CORTEX_ENABLED_CROSS_REGION = DISABLED</code> on 20 real pages: <code>AI_PARSE_DOCUMENT</code> (OCR and LAYOUT), <code>AI_EXTRACT</code>, <code>AI_COMPLETE</code> with each model including one image-input call, and the Cortex Search build. A call that succeeds is served in-region; an availability error means that function/model is out. Also run <code>SHOW CORTEX BASE MODELS</code> for lifecycle status so no chosen model is near end-of-life. Record results in the DPIA.</td></tr>
 <tr><td>Legal basis</td><td>UK GDPR + Data Protection Act 2018. Health data is special-category (Art. 9): care-provision condition for treatment; clinic is controller, Snowflake and Google are processors under written DPAs; keep a current sub-processor list. A <b>DPIA is mandatory</b> (large-scale health data, new technology) and is a gate before the pilot.</td></tr>
@@ -183,7 +184,88 @@ sequenceDiagram
 <tr><td>Languages</td><td>London clinics see many languages. <code>AI_PARSE_DOCUMENT</code> is documented as trained for Chinese, English, French, German, Hindi, Italian, Norwegian, Polish, Portuguese, Romanian, Russian, Spanish, Swedish, Turkish and Ukrainian — <b>not Arabic, Bengali, Gujarati, Urdu or Somali</b>, which are common in London. Measure OCR accuracy per language in the pilot and send untrained-language pages to full review by default until measured. Store the original text as the source of truth; any English rendering is stored separately and labelled machine translation.</td></tr>
 </table>
 
-<h2>5. End-to-end pipeline</h2>
+<h2>5. When Cortex isn't available: Snowflake on GCP + Vertex AI batch (Option 2 in detail)</h2>
+<p>RxBridge runs on GCP, and Cortex's parse, extract and LLM functions are not native in GCP London (§4.1). The efficient answer is to <b>split Snowflake's role</b>: Snowflake stays the control and governance plane (registry, dedupe, validators, review, gold, audit), while the AI work runs as <b>Vertex AI batch jobs in the same GCP region</b>, exchanging files through GCS. Nothing crosses a cloud boundary, nothing leaves the UK, and the AI spend is billed by Google at batch prices instead of through Snowflake credits.</p>
+<div class="diagram-box">
+<svg viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="a5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<g font-size="12" text-anchor="middle">
+<rect x="10" y="15" width="880" height="95" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/><text x="25" y="33" text-anchor="start" font-weight="600" fill="#555">Snowflake (GCP London) — control and governance plane</text>
+<rect x="25" y="45" width="130" height="50" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="90" y="66" font-weight="600" fill="#004D40">Registry + dedupe</text><text x="90" y="83" font-size="10" fill="#00695C">manifest, NHS no.</text>
+<rect x="175" y="45" width="130" height="50" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="240" y="66" font-weight="600" fill="#004D40">Batch builder</text><text x="240" y="83" font-size="10" fill="#00695C">JSONL requests</text>
+<rect x="445" y="45" width="130" height="50" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="510" y="66" font-weight="600" fill="#004D40">Snowpipe ingest</text><text x="510" y="83" font-size="10" fill="#00695C">results to tables</text>
+<rect x="595" y="45" width="130" height="50" rx="8" fill="#FDE8E0" stroke="#E4572E" stroke-width="1.5"/><text x="660" y="66" font-weight="600" fill="#7C2D12">Validate + route</text><text x="660" y="83" font-size="10" fill="#9A3B1C">dm+d, NHS no.</text>
+<rect x="745" y="45" width="130" height="50" rx="8" fill="#FDE8E0" stroke="#E4572E" stroke-width="1.5"/><text x="810" y="66" font-weight="600" fill="#7C2D12">Review + gold</text><text x="810" y="83" font-size="10" fill="#9A3B1C">outbox</text>
+<rect x="10" y="135" width="880" height="95" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/><text x="25" y="153" text-anchor="start" font-weight="600" fill="#555">GCP europe-west2 — AI plane and exchange (same region as RxBridge)</text>
+<rect x="25" y="165" width="130" height="50" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="90" y="186" font-weight="600" fill="#14532D">GCS raw bucket</text><text x="90" y="203" font-size="10" fill="#14532D">scans, immutable</text>
+<rect x="175" y="165" width="130" height="50" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="240" y="186" font-weight="600" fill="#14532D">GCS batch input</text><text x="240" y="203" font-size="10" fill="#14532D">requests per batch</text>
+<rect x="325" y="165" width="200" height="50" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="425" y="186" font-weight="600" fill="#1E3A8A">Vertex AI batch (Gemini)</text><text x="425" y="203" font-size="10" fill="#1E3A8A">classify · extract · verify · (Document AI OCR)</text>
+<rect x="545" y="165" width="130" height="50" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="610" y="186" font-weight="600" fill="#14532D">GCS batch output</text><text x="610" y="203" font-size="10" fill="#14532D">JSONL results</text>
+<rect x="695" y="165" width="180" height="50" rx="8" fill="#FFF7ED" stroke="#F97316" stroke-width="1.5"/><text x="785" y="186" font-weight="600" fill="#9A3412">Cloud Run bridge</text><text x="785" y="203" font-size="10" fill="#9A3412">outbox → Pub/Sub</text>
+<g stroke="#666" stroke-width="1.5" marker-end="url(#a5)"><line x1="90" y1="165" x2="90" y2="97"/><line x1="240" y1="95" x2="240" y2="163"/><line x1="305" y1="190" x2="323" y2="190"/><line x1="525" y1="190" x2="545" y2="190"/><line x1="610" y1="165" x2="540" y2="97"/><line x1="575" y1="70" x2="593" y2="70"/><line x1="725" y1="70" x2="743" y2="70"/><line x1="810" y1="95" x2="800" y2="163"/></g>
+<rect x="10" y="255" width="880" height="95" rx="14" fill="#FFF7ED" stroke="#F97316" stroke-dasharray="4 3"/><text x="25" y="273" text-anchor="start" font-weight="600" fill="#9A3412">Priority path (walk-in patient): do not wait for the batch</text>
+<rect x="25" y="285" width="190" height="50" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="120" y="306" font-weight="600" fill="#3730A3">patient.checked_in</text><text x="120" y="323" font-size="10" fill="#4C3FBF">Pub/Sub</text>
+<rect x="260" y="285" width="260" height="50" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="390" y="306" font-weight="600" fill="#1E3A8A">RxBridge Document agent (online)</text><text x="390" y="323" font-size="10" fill="#1E3A8A">that patient's pending files, real-time lane</text>
+<rect x="565" y="285" width="310" height="50" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="720" y="306" font-weight="600" fill="#14532D">document.completed → Memory agent</text><text x="720" y="323" font-size="10" fill="#14532D">idempotency key stops the batch lane duplicating it</text>
+<g stroke="#666" stroke-width="1.5" marker-end="url(#a5)"><line x1="215" y1="310" x2="258" y2="310"/><line x1="520" y1="310" x2="563" y2="310"/></g>
+</g>
+</svg>
+</div>
+<div class="why-box">
+<h3>Why this is the efficient shape</h3>
+<ul>
+<li><b>Batch, not per-row calls.</b> Snowflake writes a JSONL request file to GCS; Vertex AI batch prediction processes it asynchronously and writes results back. Google documents batch mode for Gemini at a 50% discount, there is no per-request rate-limit handling to build, and 100k reports become a handful of batch jobs (for example 10–20k reports each) instead of 100k synchronous calls from a Snowflake external-access function. Confirm batch job size limits and quotas in the Vertex docs.</li>
+<li><b>No cloud boundary, no egress.</b> Snowflake on GCP reads and writes the same-region GCS buckets through a storage integration, and Snowpipe auto-ingest uses Pub/Sub notifications natively. Scans never move to another cloud.</li>
+<li><b>Priority patients skip Snowflake entirely.</b> A walk-in's pending legacy files go straight to RxBridge's existing online Document agent — the same low-latency path as a desk upload — and the idempotency key stops the batch lane from re-processing them. This is simpler and faster than any Snowflake round trip, and it gives the real-time guarantee in §3 without a second low-latency stack.</li>
+<li><b>Tiered models.</b> A small model classifies from page one only, a mid model extracts, a second pass verifies, and only handwritten or low-agreement reports escalate to a Pro-class model. Because everything is batch, escalation is just another batch job over a filtered list.</li>
+<li><b>Snowflake keeps doing what it is good at here:</b> SQL-driven registry and dedupe, validators joined against dm+d reference data, review queue and Streamlit UI, row-level access and masking, audit queries, and gold tables. It no longer pays for tokens.</li>
+</ul>
+</div>
+
+<h3>5.1 Cost model (order of magnitude, 100k reports, ~300k pages)</h3>
+<p style="font-size:13.5px">Prices from Google's public Vertex AI and Document AI pricing pages, read 5 Oct 2026, USD. Assumptions: ~1,000 tokens per page image, 1,000-token prompt, so ~4,000 input tokens per report; 1,500 output tokens for extraction, 800 for verification; 15% of reports escalate to a Pro-class model; batch pricing at 50% of standard. Token counts per page vary by model and image resolution — measure in the pilot.</p>
+<table>
+<tr><th>Step</th><th>Model class</th><th>Estimated AI cost</th></tr>
+<tr><td>Classify (page 1 only)</td><td>Gemini 2.5 Flash-Lite, batch ($0.10 in / $0.40 out per 1M standard)</td><td>~$10</td></tr>
+<tr><td>Extract (all reports)</td><td>Gemini 2.5 Flash, batch ($0.30 / $2.50 per 1M standard)</td><td>~$250</td></tr>
+<tr><td>Verify (all reports, source + JSON)</td><td>Gemini 2.5 Flash, batch</td><td>~$180</td></tr>
+<tr><td>Handwriting escalation (15%)</td><td>Gemini 2.5 Pro, batch ($1.25 / $10 per 1M standard)</td><td>~$150</td></tr>
+<tr><td><b>Total, 2.5-generation models</b></td><td></td><td><b>~$0.6k</b> (~$0.65k with a ~10% non-global/regional premium)</td></tr>
+<tr><td>Total, newer Flash-generation models</td><td>List price in the page's batch table for Flash 3.x from Jan 2027: $0.75 in / $3.75 out per 1M</td><td>~$1.7k (~$1.9k regional)</td></tr>
+<tr><td>Add-on: Document AI Enterprise OCR for all pages</td><td>$1.50 per 1,000 pages after the first 1,000 free</td><td>~$450</td></tr>
+<tr><td>Snowflake compute (orchestration, validators, review UI)</td><td>X-Small warehouse, 1 credit/hour; ~6 h/day for 4 weeks</td><td>~170 credits (price per your contract)</td></tr>
+<tr><td>Human review</td><td>~30k items × ~1.5 min average ≈ 750 hours</td><td>~$15k at an assumed $20/hour loaded</td></tr>
+</table>
+<div class="why-box">
+<h3>What the numbers say</h3>
+<ul>
+<li><b>AI cost is small next to review labour</b> — roughly 5–15% of the total. Optimise for accuracy, not token price: every point of auto-approve rate saved (about 1,000 fewer reviews) is worth more than the whole Pro-escalation line. That argues for a verifier pass and Pro escalation on handwriting even though they add cost.</li>
+<li><b>Prefer the Gemini-direct path first (V1), add Document AI OCR (V2) only if the pilot shows it pays.</b> V1 is cheapest and one step. V2 adds ~$450 but gives a deterministic OCR engine with per-word confidence — the same independent evidence RxBridge's Document agent already uses — which makes the source-quote check a check against a different system rather than against the model's own transcription. Decide on measured medication-field error rate.</li>
+<li><b>Residency pricing matters.</b> Google lists a "global" and a "non-global" price (about 10% higher for the newer models shown). A UK-resident design must call a regional endpoint, not the global endpoint, so budget the non-global price.</li>
+</ul>
+</div>
+
+<h3>5.2 Variants</h3>
+<table>
+<tr><th>Variant</th><th>Pipeline</th><th>Cost</th><th>Latency (bulk)</th><th>Evidence quality</th></tr>
+<tr><td>V1 Gemini-direct</td><td>Page images/PDF → Gemini batch (classify, extract) → Gemini batch verify → validators</td><td>Lowest (~$0.6k AI)</td><td>Hours per batch job; whole backlog in days</td><td>Good; source-quote check relies on model transcription</td></tr>
+<tr><td>V2 OCR + LLM</td><td>Document AI OCR (confidence) → Gemini text extraction → image verify on flagged pages</td><td>~$1.0–1.3k AI</td><td>Similar; OCR batch adds a stage</td><td>Best; independent OCR evidence and confidence, mirrors RxBridge</td></tr>
+<tr><td>V3 Cortex on AWS London</td><td>All in Snowflake (§4 option 1)</td><td>Snowflake credits — page-rate not verified</td><td>Set-based, simplest to operate</td><td>Good; not available if GCP is mandatory</td></tr>
+</table>
+
+<h3>5.3 Is Snowflake still the right control plane on GCP?</h3>
+<div class="why-box">
+<ul>
+<li><b>If Snowflake is a requirement</b> (clinic standard, existing licence, wider analytics plans): use this Option 2 design. The AI plane stays on GCP, Snowflake provides governance and review.</li>
+<li><b>If it is a preference, not a requirement:</b> a GCP-native control plane is cheaper and simpler. Use BigQuery in place of Snowflake tables, Workflows and Cloud Run Jobs for orchestration, and a Cloud Run + IAP review app. RxBridge already uses BigQuery, Firestore, Pub/Sub and Vertex AI, so there is one platform, one set of IAM and one DPIA processor chain, and no bridge to run. The trade-off is giving up Snowflake's built-in masking/row-access tooling, Streamlit review UI and SQL-first workflow.</li>
+<li><b>My recommendation:</b> start with V1 on the Option 2 split if Snowflake is mandated; if not, ask whether the clinic gains anything from a second data platform for what is, after backfill, a one-off migration.</li>
+</ul>
+</div>
+
+<h3>5.4 Not verified — check before committing</h3>
+<div class="warn">Google's documentation pages for Vertex AI regions, batch prediction and Document AI locations were not reachable from this environment, so these are <b>unverified</b>: (1) the chosen Gemini model is served from a UK regional endpoint (<code>europe-west2</code>) and supports batch prediction there; (2) Document AI processors are available in a UK location — it may only offer EU multi-region, which would be an EU transfer for the DPIA; (3) batch job size limits, quotas and completion-time guarantees; (4) tokens per page for your scan types. Run the same residency proof as §4: a 20-page batch on the regional endpoint, confirm the job location, and record it in the DPIA. Token counts and the regional price premium should be re-measured in the pilot.</div>
+
+<h2>6. End-to-end pipeline</h2>
 <div class="diagram-box">
 <svg viewBox="0 0 900 190" xmlns="http://www.w3.org/2000/svg">
 <defs><marker id="a1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
@@ -211,7 +293,7 @@ sequenceDiagram
 </ul>
 </div>
 
-<h2>6. Layered architecture</h2>
+<h2>7. Layered architecture</h2>
 <div class="diagram-box">
 <svg viewBox="0 0 700 520" xmlns="http://www.w3.org/2000/svg">
 <defs><marker id="a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
@@ -251,7 +333,7 @@ sequenceDiagram
 </ul>
 </div>
 
-<h2>7. Sequence — one report, end to end</h2>
+<h2>8. Sequence — one report, end to end</h2>
 <div class="diagram-box">
 <pre class="mermaid">
 sequenceDiagram
@@ -299,8 +381,9 @@ sequenceDiagram
 </ul>
 </div>
 
-<h2>8. Snowflake implementation sketch</h2>
-<h3>8.1 Ingest and stage</h3>
+<h2>9. Snowflake implementation sketch</h2>
+<div class="warn">The parse/classify/extract snippets in 9.2–9.3 show the Cortex path (option 1). Under option 2 (§5) those steps become: the batch builder writes JSONL requests to GCS, Vertex AI batch writes results to GCS, and a Snowpipe loads them into the same <code>curated</code> tables. Registry, dedupe, validators, review, gold, outbox and the priority table are identical in both options.</div>
+<h3>9.1 Ingest and stage</h3>
 <pre class="sql"><code>CREATE DATABASE rx_digitize;
 CREATE SCHEMA rx_digitize.raw;     -- immutable evidence
 CREATE SCHEMA rx_digitize.curated; -- re-derivable AI output
@@ -317,7 +400,7 @@ CREATE TABLE rx_digitize.curated.report_registry (
   clinic_id STRING, batch_id STRING, pages INT, status STRING, ingested_at TIMESTAMP_LTZ
 );</code></pre>
 
-<h3>8.2 Parse (tier 1, cheap) with escalation</h3>
+<h3>9.2 Parse (tier 1, cheap) with escalation</h3>
 <pre class="sql"><code>CREATE TABLE rx_digitize.curated.parsed AS
 SELECT r.report_id,
        AI_PARSE_DOCUMENT(TO_FILE('@rx_digitize.raw.reports', r.file_path),
@@ -332,7 +415,7 @@ FROM rx_digitize.curated.report_registry r
 WHERE p.report_id = r.report_id
   AND AVG(LENGTH(p.doc:pages[0].content)) &lt; 200;  -- illustrative; compute per page in practice</code></pre>
 
-<h3>8.3 Classify + extract (Prompts 1 and 2 are stored in a prompt table, versioned)</h3>
+<h3>9.3 Classify + extract (Prompts 1 and 2 are stored in a prompt table, versioned)</h3>
 <pre class="sql"><code>SELECT p.report_id,
        AI_COMPLETE(
          model  =&gt; 'claude-sonnet-4-6',       -- native in AWS London; verify with cross-region DISABLED
@@ -343,7 +426,7 @@ WHERE p.report_id = r.report_id
        ) AS extraction
 FROM rx_digitize.curated.parsed p JOIN rx_digitize.curated.classified c USING (report_id);</code></pre>
 
-<h3>8.4 Orchestration and publish</h3>
+<h3>9.4 Orchestration and publish</h3>
 <pre class="sql"><code>CREATE TASK rx_digitize.curated.t_ingest  WAREHOUSE = wh_ingest  SCHEDULE = '5 MINUTE'
   WHEN SYSTEM$STREAM_HAS_DATA('rx_digitize.raw.new_files') AS CALL curated.sp_register();
 CREATE TASK rx_digitize.curated.t_parse   WAREHOUSE = wh_ai AFTER t_ingest  AS CALL curated.sp_parse(5000);
@@ -362,7 +445,7 @@ CREATE TABLE rx_digitize.gold.outbox (
 -- Cloud Run bridge (key-pair auth, UK egress IPs allow-listed) reads unpublished rows via the SQL API,
 -- publishes document.completed to Pub/Sub, then sets published_at (at-least-once; the idempotency key dedupes).</code></pre>
 
-<h3>8.5 Patient-priority lane (walk-in meets archive)</h3>
+<h3>9.5 Patient-priority lane (walk-in meets archive)</h3>
 <pre class="sql"><code>CREATE TABLE rx_digitize.curated.priority_patients (
   patient_id STRING, requested_at TIMESTAMP_LTZ, expires_at TIMESTAMP_LTZ, trace_id STRING);
 CREATE STREAM rx_digitize.curated.priority_stream ON TABLE rx_digitize.curated.priority_patients;
@@ -378,7 +461,7 @@ CREATE TASK rx_digitize.curated.t_priority WAREHOUSE = wh_ai_priority
 <p style="font-size:13.5px">The priority lane uses its own small warehouse and a reserved concurrency budget, so a 5,000-report backfill batch can never delay a checked-in patient's reports. Patient completeness counters (<code>total / verified / in_review / pending</code>) are written to <code>patients/{id}/legacy_status</code> in Firestore after every publish, which is what the Memory agent reads at check-in.</p>
 <div class="warn">These snippets show shape, not final syntax: function names, supported models, argument names and file-size/page limits for <code>AI_PARSE_DOCUMENT</code> / <code>AI_COMPLETE</code> / <code>AI_EXTRACT</code> change between Snowflake releases — validate against current docs on a 50-document spike before locking the design.</div>
 
-<h2>9. Quality and confidence model</h2>
+<h2>10. Quality and confidence model</h2>
 <table>
 <tr><th>Signal</th><th>How it is produced</th><th>Used for</th></tr>
 <tr><td>Field confidence (self-reported)</td><td>Extractor returns <code>high|medium|low</code> per field, plus a verbatim <code>source_quote</code></td><td>Weak signal only; never used alone</td></tr>
@@ -398,7 +481,7 @@ CREATE TASK rx_digitize.curated.t_priority WAREHOUSE = wh_ai_priority
 </ul>
 </div>
 
-<h2>10. RCTFC prompts</h2>
+<h2>11. RCTFC prompts</h2>
 <p>RCTFC = <b>R</b>ole · <b>C</b>ontext · <b>T</b>ask · <b>F</b>ormat · <b>C</b>onstraints. Prompts are stored versioned in a <code>prompts</code> table; the placeholder <code>{{...}}</code> values are filled by the pipeline. Temperature 0 for all three.</p>
 
 <div class="prompt"><div class="hd">Prompt 1 — Document classifier (cheap model tier)</div>
@@ -452,12 +535,12 @@ where each f = {"value": <string|null>, "confidence": "high|medium|low", "source
 <li><b>Role</b> sets the error preference ("wrong is worse than missing") once, so every field-level decision leans toward null/low-confidence instead of fabrication.</li>
 <li><b>Context</b> carries what the model can't see: the OCR noise profile, clinic abbreviations, and — crucially — the downstream stakes. Models are measurably more conservative when told a value enters a medical record.</li>
 <li><b>Task</b> is narrowed to one verb per prompt (classify / extract / audit). Merging them is the main source of silent quality loss at scale.</li>
-<li><b>Format</b> is machine-checkable JSON plus <code>source_quote</code>, which makes the hallucination check in §9 deterministic rather than a judgement call.</li>
+<li><b>Format</b> is machine-checkable JSON plus <code>source_quote</code>, which makes the hallucination check in §10 deterministic rather than a judgement call.</li>
 <li><b>Constraints</b> hold the safety rules: never "correct" a drug name, never infer, treat document text as data (prompt-injection defence — a scanned page can literally say "ignore previous instructions"), and JSON-only output so the parser never breaks the task graph.</li>
 </ul>
 </div>
 
-<h2>11. Security, privacy and governance</h2>
+<h2>12. Security, privacy and governance</h2>
 <table>
 <tr><th>Concern</th><th>Control</th></tr>
 <tr><td>Health data at rest / in transit</td><td>UK region only (AWS London per §4.1); Business Critical edition; customer-managed key (Tri-Secret Secure) if the clinic's information-governance lead requires it; private connectivity or allow-listed egress to the bridge; encrypted stage; network policy limiting access to clinic and RxBridge egress IPs</td></tr>
@@ -467,10 +550,10 @@ where each f = {"value": <string|null>, "confidence": "high|medium|low", "source
 <tr><td>Prompt injection from documents</td><td>Document text always passed as a delimited data block; "ignore instructions" constraint in every prompt; output validated against JSON schema; extraction output is never executed or used to build SQL</td></tr>
 <tr><td>Audit / medico-legal</td><td>Original file retained immutable; each gold value links to <code>report_id, page, source_quote, model, prompt_version, reviewer_id</code>; ACCESS_HISTORY enabled</td></tr>
 <tr><td>Paper destruction</td><td>Shred only after: gold published + sample audit passed + retention check against the NHS Records Management Code schedule and a BS 10008-style scan-quality audit. Digital original kept for the full retention period.</td></tr>
-<tr><td>Regulatory</td><td>UK GDPR / DPA 2018, DPIA, clinical-safety hazard log and retention rules are covered in §4 and are gates in the rollout (§13).</td></tr>
+<tr><td>Regulatory</td><td>UK GDPR / DPA 2018, DPIA, clinical-safety hazard log and retention rules are covered in §4 and are gates in the rollout (§14).</td></tr>
 </table>
 
-<h2>12. Scale, throughput and cost</h2>
+<h2>13. Scale, throughput and cost</h2>
 <table>
 <tr><th>Item</th><th>Estimate (100k reports)</th><th>Notes</th></tr>
 <tr><td>Volume</td><td>~300k pages (3 pages avg), ~100–400 GB raw</td><td>Replace with a measured sample first</td></tr>
@@ -489,7 +572,7 @@ where each f = {"value": <string|null>, "confidence": "high|medium|low", "source
 </ul>
 </div>
 
-<h2>13. Rollout plan</h2>
+<h2>14. Rollout plan</h2>
 <table>
 <tr><th>Wave</th><th>Scope</th><th>Exit criteria</th></tr>
 <tr><td>0 — Spike (1 wk)</td><td>50 hand-picked docs across types; confirm London-region function/model availability, limits; <b>DPIA signed off, Clinical Safety Officer named, hazard log opened</b>; scanning manifest format agreed</td><td>Parse + extract works on all doc types; limits known; legal/safety gates passed</td></tr>
@@ -499,7 +582,7 @@ where each f = {"value": <string|null>, "confidence": "high|medium|low", "source
 <tr><td>4 — Cut-over</td><td>New documents go through RxBridge Document agent directly; paper intake stops; retention-compliant destruction schedule</td><td>"No paper" declared per clinic after sign-off</td></tr>
 </table>
 
-<h2>14. Operations and KPIs</h2>
+<h2>15. Operations and KPIs</h2>
 <div class="why-box">
 <h3>What to monitor</h3>
 <ul>
@@ -511,10 +594,10 @@ where each f = {"value": <string|null>, "confidence": "high|medium|low", "source
 </ul>
 </div>
 
-<h2>15. Open decisions for the clinic</h2>
+<h2>16. Open decisions for the clinic</h2>
 <div class="why-box">
 <ul>
-<li>Option 1, 2 or 3 (§4)? Recommended: a Snowflake account on AWS London. Is the clinic able to use a Snowflake account on AWS, or is GCP mandatory (then option 2)? Confirm the §4.1 availability in the actual account with the residency proof, and decide who owns the cross-cloud hand-off.</li>
+<li>Since RxBridge is on GCP: confirm Option 2 (§5) — Snowflake as control plane on GCP, AI as Vertex AI batch. Is Snowflake a hard requirement, or is a BigQuery-based control plane acceptable (cheaper, one platform)? Verify the Google-side items in §5.4 (UK regional endpoint, batch support, Document AI location) with a 20-page residency proof, and pick V1 (Gemini-direct) or V2 (Document AI OCR + LLM) from pilot error rates.</li>
 <li>Will the scanning vendor capture NHS number/MRN per folder in the manifest? Without it, no patient-priority.</li>
 <li>Retention schedule and paper-destruction sign-off owner (information-governance lead).</li>
 <li>Languages and handwriting share in the real archive (drives parse-mode escalation cost and review load).</li>
