@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Gateway with AI Governance — Architecture &amp; Flow Diagrams</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0 auto; padding: 40px; background: #fff; color: #1f1f1f; max-width: 980px; line-height: 1.5; }
+  h1 { font-size: 26px; margin-bottom: 4px; }
+  p.sub { color: #555; margin-top: 0; }
+  h2 { font-size: 19px; margin-top: 56px; padding-bottom: 8px; border-bottom: 2px solid #e5e5e5; }
+  h3 { font-size: 15px; margin: 22px 0 8px; }
+  .diagram-box { border: 1px solid #ddd; border-radius: 10px; padding: 20px; margin: 16px 0 8px; overflow: auto; background: #fafafa; }
+  svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+  .note { font-size: 13px; color: #666; margin-top: 4px; }
+  .why-box { background: #F5F7FA; border-left: 4px solid #3B82F6; border-radius: 6px; padding: 16px 20px; margin: 8px 0 0; }
+  .why-box h3 { font-size: 14px; margin: 0 0 10px; color: #1E3A8A; }
+  .why-box ul { margin: 0; padding-left: 20px; }
+  .why-box li { font-size: 14px; line-height: 1.55; margin-bottom: 8px; }
+  .why-box li:last-child { margin-bottom: 0; }
+  code { background: #E8ECF3; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; margin: 10px 0; }
+  th, td { border: 1px solid #ddd; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #F1F5F9; }
+  .warn { background: #FFF7ED; border-left: 4px solid #F97316; border-radius: 6px; padding: 12px 16px; font-size: 14px; margin: 12px 0; }
+
+  /* ---- SVG conventions (same palette as the reference sheets) ---- */
+  .t { font-size: 13px; font-weight: 600; text-anchor: middle; }
+  .s { font-size: 10.5px; text-anchor: middle; }
+  .st { font-size: 10.5px; font-weight: 700; text-anchor: middle; }
+  .lbl { font-size: 13px; font-weight: 600; fill: #555; }
+  .flow { stroke-dasharray: 7 5; animation: flow12 1s linear infinite; }
+  .flow.audit { stroke-dasharray: 4 4; animation: flow8 1.4s linear infinite; }
+  @keyframes flow12 { to { stroke-dashoffset: -12; } }
+  @keyframes flow8 { to { stroke-dashoffset: -8; } }
+
+  /* ---- Live diagram states ---- */
+  #gw .node rect { transition: fill .25s, stroke .25s, stroke-width .25s, opacity .25s; }
+  #gw .node, #gw .base { transition: opacity .3s; }
+  #gw .node.active rect { stroke-width: 3; }
+  #gw .node.ok rect { stroke: #22A559; stroke-width: 2.5; }
+  #gw .node.bad rect { fill: #FDE8E0; stroke: #E4572E; stroke-width: 2.5; stroke-dasharray: none; }
+  #gw .node.hold rect { stroke: #F97316; stroke-width: 2.5; }
+  #gw .node.ping rect { fill: #FFEDD5; stroke-width: 2.5; }
+  #gw.focus .node:not(.on), #gw.focus .base { opacity: .35; }
+  #gw.focus .pkt.amb { opacity: .15; }
+  #gw .hl { fill: none; stroke-width: 5; stroke-linecap: round; opacity: .45; stroke-dasharray: 7 5; animation: flow12 .8s linear infinite; }
+  #gw .hl.ok { stroke: #22A559; }
+  #gw .hl.bad { stroke: #E4572E; }
+  #gw .pkt { stroke: #fff; stroke-width: 1.5; }
+  #routes path { fill: none; stroke: none; }
+
+  /* ---- Controls and live panels ---- */
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .btn { font: inherit; font-size: 13px; font-weight: 600; color: #1f1f1f; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+  .btn:hover:not(:disabled) { background: #F1F5F9; }
+  .btn:focus-visible { outline: 2px solid #3B82F6; outline-offset: 2px; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .btn .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .btn.ghost { margin-left: auto; font-weight: 500; color: #334155; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 16px 0 12px; }
+  .stat { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 12px; }
+  .stat .n { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat .k { font-size: 12px; color: #555; }
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .panel { background: #fff; border: 1px solid #cbd5e1; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+  .panel .hd { background: #1E3A8A; color: #fff; padding: 9px 14px; font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .panel .hd small { font-weight: 500; opacity: .85; font-size: 12px; }
+  .scn { padding: 10px 14px 0; font-size: 13px; color: #334155; min-height: 20px; }
+  .chip { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 1px 7px; border-radius: 10px; }
+  .chip.allow { background: #DCF5E3; color: #14532D; }
+  .chip.deny { background: #FDE8E0; color: #7C2D12; }
+  .chip.throttle { background: #FFF7ED; color: #9A3412; }
+  .chip.idle { background: #EEF2FF; color: #3730A3; }
+  ol.steps { list-style: none; margin: 0; padding: 8px 14px 14px; }
+  ol.steps li { display: grid; grid-template-columns: 24px 1fr; gap: 10px; padding: 7px 0; border-top: 1px solid #f1f5f9; font-size: 13px; }
+  ol.steps li:first-child { border-top: none; }
+  ol.steps .ic { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid #cbd5e1; color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  ol.steps .d { display: block; color: #555; font-size: 12.5px; line-height: 1.45; }
+  ol.steps li.run .ic { border-color: #3B82F6; background: #DCEAFE; color: #1E3A8A; }
+  ol.steps li.ok .ic { border-color: #22A559; background: #22A559; }
+  ol.steps li.bad .ic { border-color: #E4572E; background: #E4572E; }
+  ol.steps li.hold .ic { border-color: #F97316; background: #F97316; }
+  ol.steps li.skip { opacity: .55; }
+  ol.steps li.skip .ic { color: #555; }
+  .log { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; padding: 6px 0; max-height: 372px; overflow: auto; flex: 1; }
+  .lrow { display: grid; grid-template-columns: 62px 82px 1fr; gap: 6px; padding: 6px 14px; border-top: 1px solid #f1f5f9; align-items: start; }
+  .lrow:first-child { border-top: none; }
+  .lrow.sc { background: #F5F7FA; box-shadow: inset 3px 0 0 #3B82F6; }
+  .lrow .tm { color: #64748B; }
+  .lrow .why { grid-column: 3; color: #64748B; font-size: 11.5px; }
+  .lrow .chip { text-align: center; }
+  .empty { color: #64748B; padding: 10px 14px; font-size: 12.5px; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+  @media (max-width: 760px) {
+    body { padding: 16px; }
+    .panels { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .btn.ghost { margin-left: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .flow, .flow.audit, #gw .hl { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Shared arrow markers (same shape as the reference sheets, one per line color) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+<marker id="mk-k" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="mk-g" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#22A559" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="mk-r" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#E4572E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="mk-b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#3B82F6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<marker id="mk-t" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#00897B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+</svg>
+
+<h1>MCP Gateway with AI Governance — Architecture &amp; Flow Diagrams</h1>
+<p class="sub">Companion to the <i>Architecture &amp; AI Governance Brief</i>. Every AI agent request to an enterprise tool passes through one governed gateway: identity, policy, credential brokering, rate limiting and audit, in that order. Traffic on this page is simulated for illustration; no live systems are connected.</p>
+
+<h2>1. Live request flow through the gateway</h2>
+<div class="diagram-box">
+<div class="controls" role="group" aria-label="Simulations">
+  <button class="btn" id="b-allow" type="button"><span class="dot" style="background:#22A559"></span>Simulate Authorized Request</button>
+  <button class="btn" id="b-deny" type="button"><span class="dot" style="background:#E4572E"></span>Simulate Unauthorized Role Block</button>
+  <button class="btn" id="b-rate" type="button"><span class="dot" style="background:#F97316"></span>Simulate Rate-Limit Trigger</button>
+  <button class="btn ghost" id="b-live" type="button" aria-pressed="true">Pause live traffic</button>
+</div>
+
+<svg id="gw" viewBox="0 0 920 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AI agents send requests through the MCP Gateway stages Identity, Policy engine, Secret vault and Rate limiter to downstream MCP tools. Denied and throttled requests return to the agent. Every stage writes to the compliance audit log.">
+<!-- containers -->
+<g class="base">
+<rect x="10" y="30" width="150" height="320" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="25" y="48" class="lbl">AI agents</text>
+<rect x="185" y="30" width="520" height="320" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="200" y="48" class="lbl">MCP Gateway · single policy enforcement point</text>
+<rect x="725" y="30" width="185" height="320" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="740" y="48" class="lbl">Downstream MCP tools</text>
+</g>
+
+<!-- static routes -->
+<g class="base" fill="none" stroke-width="1.5">
+  <g stroke="#666" marker-end="url(#mk-k)">
+    <path d="M145 107 C 175 107 172 189 198 189"/>
+    <path d="M145 197 L198 189"/>
+    <path d="M145 287 C 175 287 172 189 198 189"/>
+    <path d="M308 189 H323"/><path d="M433 189 H448"/><path d="M558 189 H573"/>
+    <path d="M683 189 C 712 189 712 99 738 99"/>
+    <path d="M683 189 H738"/>
+    <path d="M683 189 C 712 189 712 279 738 279"/>
+  </g>
+  <g stroke="#E4572E" stroke-dasharray="5 4">
+    <path d="M379 153 V106" marker-end="url(#mk-r)"/>
+    <path d="M629 153 V106" marker-end="url(#mk-r)"/>
+    <path d="M629 74 V66 H172 V267"/>
+    <path d="M379 74 V66"/>
+    <path d="M172 87 H147" marker-end="url(#mk-r)"/>
+    <path d="M172 177 H147" marker-end="url(#mk-r)"/>
+    <path d="M172 267 H147" marker-end="url(#mk-r)"/>
+  </g>
+  <text x="504" y="93" font-size="10.5" fill="#9A3B1C" text-anchor="middle" stroke="none">returned to agent</text>
+  <g stroke="#3B82F6" class="flow audit" marker-end="url(#mk-b)">
+    <path d="M254 225 V388"/><path d="M379 225 V388"/><path d="M504 225 V388"/><path d="M629 225 V388"/>
+    <path d="M895 99 H903 V418 H685"/>
+  </g>
+  <path d="M895 189 H903 M895 279 H903" stroke="#3B82F6" stroke-dasharray="4 4"/>
+  <text x="642" y="372" font-size="10.5" fill="#1E3A8A">every decision, allow or deny</text>
+</g>
+
+<g id="hl"></g>
+
+<!-- agents -->
+<g class="node" data-node="a0"><rect x="25" y="68" width="120" height="62" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="85" y="89" class="t" fill="#3730A3">Support agent</text><text x="85" y="104" class="s" fill="#4C3FBF">customer service</text><text x="85" y="122" class="st"></text></g>
+<g class="node" data-node="a1"><rect x="25" y="158" width="120" height="62" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="85" y="179" class="t" fill="#3730A3">Analyst agent</text><text x="85" y="194" class="s" fill="#4C3FBF">data insights</text><text x="85" y="212" class="st"></text></g>
+<g class="node" data-node="a2"><rect x="25" y="248" width="120" height="62" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="85" y="269" class="t" fill="#3730A3">Ops copilot</text><text x="85" y="284" class="s" fill="#4C3FBF">IT workflows</text><text x="85" y="302" class="st"></text></g>
+
+<!-- gateway stages -->
+<g class="node" data-node="id"><rect x="200" y="153" width="108" height="72" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="254" y="175" class="t" fill="#1E3A8A">1 · Identity</text><text x="254" y="191" class="s" fill="#1E3A8A">agent + user</text><text x="254" y="214" class="st"></text></g>
+<g class="node" data-node="pol"><rect x="325" y="153" width="108" height="72" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="379" y="175" class="t" fill="#1E3A8A">2 · Policy</text><text x="379" y="191" class="s" fill="#1E3A8A">RBAC + ABAC</text><text x="379" y="214" class="st"></text></g>
+<g class="node" data-node="vault"><rect x="450" y="153" width="108" height="72" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="504" y="175" class="t" fill="#1E3A8A">3 · Secret vault</text><text x="504" y="191" class="s" fill="#1E3A8A">scoped, short-lived</text><text x="504" y="214" class="st"></text></g>
+<g class="node" data-node="rl"><rect x="575" y="153" width="108" height="72" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="629" y="175" class="t" fill="#1E3A8A">4 · Rate limiter</text><text x="629" y="191" class="s" fill="#1E3A8A">quotas · guardrails</text><text x="629" y="214" class="st"></text></g>
+
+<!-- outcome pills -->
+<g class="node" data-node="deny"><rect x="329" y="74" width="100" height="30" rx="15" fill="#fff" stroke="#E4572E" stroke-width="1.5" stroke-dasharray="4 3"/><text x="379" y="93" font-size="11" font-weight="600" text-anchor="middle" fill="#9A3B1C">403 · policy deny</text></g>
+<g class="node" data-node="thr"><rect x="579" y="74" width="100" height="30" rx="15" fill="#fff" stroke="#E4572E" stroke-width="1.5" stroke-dasharray="4 3"/><text x="629" y="93" font-size="11" font-weight="600" text-anchor="middle" fill="#9A3B1C">429 · throttled</text></g>
+
+<!-- tools -->
+<g class="node" data-node="t0"><rect x="740" y="68" width="155" height="62" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="817" y="89" class="t" fill="#14532D">CRM &amp; ticketing</text><text x="817" y="104" class="s" fill="#14532D">SaaS API</text><text x="817" y="122" class="st"></text></g>
+<g class="node" data-node="t1"><rect x="740" y="158" width="155" height="62" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="817" y="179" class="t" fill="#14532D">Data warehouse</text><text x="817" y="194" class="s" fill="#14532D">read-only SQL</text><text x="817" y="212" class="st"></text></g>
+<g class="node" data-node="t2"><rect x="740" y="248" width="155" height="62" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="817" y="269" class="t" fill="#14532D">Internal APIs</text><text x="817" y="284" class="s" fill="#14532D">HR, finance</text><text x="817" y="302" class="st"></text></g>
+
+<!-- audit log -->
+<g class="node" data-node="audit"><rect x="200" y="390" width="483" height="56" rx="10" fill="#FFF7ED" stroke="#F97316" stroke-width="1.5"/><text x="441" y="413" class="t" fill="#9A3412">Compliance audit log</text><text x="441" y="431" class="s" fill="#9A3412">append-only · tamper-evident · trace-correlated · exports to security monitoring</text></g>
+
+<!-- legend -->
+<g font-size="11.5" fill="#334155">
+  <line x1="200" y1="478" x2="232" y2="478" stroke="#22A559" stroke-width="2.5" stroke-dasharray="7 5"/><text x="240" y="482">Allowed</text>
+  <line x1="310" y1="478" x2="342" y2="478" stroke="#E4572E" stroke-width="2.5" stroke-dasharray="7 5"/><text x="350" y="482">Policy blocked / throttled</text>
+  <line x1="510" y1="478" x2="542" y2="478" stroke="#3B82F6" stroke-width="2" stroke-dasharray="4 4"/><text x="550" y="482">Audit event</text>
+  <circle cx="640" cy="478" r="5" fill="#22A559" stroke="#fff" stroke-width="1.5"/><text x="652" y="482">Request packet</text>
+</g>
+
+<g id="routes"></g>
+<g id="pk"></g>
+</svg>
+
+<div class="stats" aria-live="off">
+  <div class="stat"><div class="n" id="c-ok" style="color:#14532D">0</div><div class="k">Requests allowed</div></div>
+  <div class="stat"><div class="n" id="c-deny" style="color:#7C2D12">0</div><div class="k">Policy blocks</div></div>
+  <div class="stat"><div class="n" id="c-thr" style="color:#9A3412">0</div><div class="k">Throttled</div></div>
+  <div class="stat"><div class="n" id="c-audit" style="color:#1E3A8A">0</div><div class="k">Audit events written</div></div>
+</div>
+
+<div class="panels">
+  <div class="panel">
+    <div class="hd">Request status <span class="chip idle" id="sc-result">LIVE</span></div>
+    <div class="scn" id="sc-title">Live traffic is flowing. Pick a simulation above to follow one request step by step.</div>
+    <ol class="steps" id="steps">
+      <li data-step="1"><span class="ic"></span><div><b>Identity verification</b><span class="d">Waiting</span></div></li>
+      <li data-step="2"><span class="ic"></span><div><b>Policy evaluation (RBAC + ABAC)</b><span class="d">Waiting</span></div></li>
+      <li data-step="3"><span class="ic"></span><div><b>Secret brokering</b><span class="d">Waiting</span></div></li>
+      <li data-step="4"><span class="ic"></span><div><b>Rate limit &amp; guardrails</b><span class="d">Waiting</span></div></li>
+      <li data-step="5"><span class="ic"></span><div><b>Tool execution</b><span class="d">Waiting</span></div></li>
+      <li data-step="6"><span class="ic"></span><div><b>Compliance audit record</b><span class="d">Waiting</span></div></li>
+    </ol>
+  </div>
+  <div class="panel">
+    <div class="hd">Audit log <small>newest first</small></div>
+    <div class="log" id="log" aria-live="polite"><div class="empty" id="log-empty">No events yet.</div></div>
+  </div>
+</div>
+<p class="sr" id="announce" aria-live="assertive"></p>
+</div>
+<p class="note">Highlighted rows in the audit log come from the simulations; the rest is background traffic. Packets follow the same paths a production request would.</p>
+
+<div class="why-box">
+<h3>Why this flow</h3>
+<ul>
+<li><b>One door for every tool call.</b> Agents never connect to tools directly. Routing all traffic through a single enforcement point is what makes the controls universal: a new agent or a new tool inherits identity checks, policy, credential brokering, limits and audit without any extra integration work.</li>
+<li><b>Cheapest rejection first.</b> Identity is checked before policy, and policy before any credential is touched. A caller that cannot prove who it is, or a request the policy denies, is stopped before it costs a vault lease or reaches a downstream system.</li>
+<li><b>Credentials are released last.</b> The vault prepares a short-lived, scoped credential, but the gateway only attaches it at dispatch, after the rate limiter and guardrails pass. In the rate-limit simulation the prepared credential is discarded and never reaches the CRM.</li>
+<li><b>Denials are as visible as approvals.</b> The blue audit lines leave every stage, not just the tool. A blocked attempt is often the most important event for a security team, so it is recorded with the same identity, policy version and trace ID as a successful call.</li>
+</ul>
+</div>
+
+<h2>2. Three decision paths: allowed, blocked, throttled</h2>
+<div class="diagram-box">
+<svg viewBox="0 0 900 318" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Three lanes: an allowed request passes all checks and reaches the tool; a policy-blocked request stops at policy evaluation with a 403; a throttled request stops at the rate limiter with a 429. All three write to the audit log.">
+<g font-size="12" text-anchor="middle">
+<!-- lane 1: allowed -->
+<rect x="10" y="10" width="742" height="94" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="26" y="30" text-anchor="start" font-size="13" font-weight="600" fill="#14532D">Allowed — every check passes</text>
+<rect x="24" y="44" width="100" height="44" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="74" y="63" font-weight="600" fill="#3730A3">Agent</text><text x="74" y="79" font-size="10" fill="#4C3FBF">analyst</text>
+<rect x="146" y="44" width="100" height="44" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="196" y="63" font-weight="600" fill="#1E3A8A">Identity</text><text x="196" y="79" font-size="10" fill="#1E3A8A">verified</text>
+<rect x="268" y="44" width="100" height="44" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="318" y="63" font-weight="600" fill="#1E3A8A">Policy</text><text x="318" y="79" font-size="10" fill="#1E3A8A">allow</text>
+<rect x="390" y="44" width="100" height="44" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="440" y="63" font-weight="600" fill="#1E3A8A">Secret vault</text><text x="440" y="79" font-size="10" fill="#1E3A8A">5-min lease</text>
+<rect x="512" y="44" width="100" height="44" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="562" y="63" font-weight="600" fill="#1E3A8A">Rate limiter</text><text x="562" y="79" font-size="10" fill="#1E3A8A">within quota</text>
+<rect x="634" y="44" width="100" height="44" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="684" y="63" font-weight="600" fill="#14532D">MCP tool</text><text x="684" y="79" font-size="10" fill="#14532D">200 OK, filtered</text>
+<g stroke="#22A559" stroke-width="2" fill="none" class="flow" marker-end="url(#mk-g)"><path d="M124 66 H144"/><path d="M246 66 H266"/><path d="M368 66 H388"/><path d="M490 66 H510"/><path d="M612 66 H632"/></g>
+<path d="M734 66 H770" stroke="#3B82F6" stroke-width="1.5" fill="none" class="flow audit" marker-end="url(#mk-b)"/>
+
+<!-- lane 2: policy blocked -->
+<rect x="10" y="112" width="742" height="94" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="26" y="132" text-anchor="start" font-size="13" font-weight="600" fill="#7C2D12">Policy blocked — denied at evaluation</text>
+<rect x="24" y="146" width="100" height="44" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="74" y="165" font-weight="600" fill="#3730A3">Agent</text><text x="74" y="181" font-size="10" fill="#4C3FBF">support</text>
+<rect x="146" y="146" width="100" height="44" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="196" y="165" font-weight="600" fill="#1E3A8A">Identity</text><text x="196" y="181" font-size="10" fill="#1E3A8A">verified</text>
+<rect x="268" y="146" width="100" height="44" rx="8" fill="#FDE8E0" stroke="#E4572E" stroke-width="1.5"/><text x="318" y="165" font-weight="600" fill="#7C2D12">Policy</text><text x="318" y="181" font-size="10" fill="#9A3B1C">no grant: deny</text>
+<rect x="390" y="146" width="100" height="44" rx="22" fill="#FDE8E0" stroke="#E4572E" stroke-width="1.5"/><text x="440" y="165" font-weight="600" fill="#7C2D12">403 returned</text><text x="440" y="181" font-size="10" fill="#9A3B1C">to the agent</text>
+<g stroke="#22A559" stroke-width="2" fill="none" class="flow" marker-end="url(#mk-g)"><path d="M124 168 H144"/><path d="M246 168 H266"/></g>
+<path d="M368 168 H388" stroke="#E4572E" stroke-width="2" fill="none" class="flow" marker-end="url(#mk-r)"/>
+<text x="623" y="160" font-size="11" font-style="italic" fill="#555">no credential issued · tool never contacted</text>
+<path d="M490 168 H770" stroke="#3B82F6" stroke-width="1.5" fill="none" class="flow audit" marker-end="url(#mk-b)"/>
+
+<!-- lane 3: throttled -->
+<rect x="10" y="214" width="742" height="94" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="26" y="234" text-anchor="start" font-size="13" font-weight="600" fill="#7C2D12">Throttled — limit exceeded</text>
+<rect x="24" y="248" width="100" height="44" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="74" y="267" font-weight="600" fill="#3730A3">Agent</text><text x="74" y="283" font-size="10" fill="#4C3FBF">ops, in a loop</text>
+<rect x="146" y="248" width="100" height="44" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="196" y="267" font-weight="600" fill="#1E3A8A">Identity</text><text x="196" y="283" font-size="10" fill="#1E3A8A">verified</text>
+<rect x="268" y="248" width="100" height="44" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="318" y="267" font-weight="600" fill="#1E3A8A">Policy</text><text x="318" y="283" font-size="10" fill="#1E3A8A">allow</text>
+<rect x="390" y="248" width="100" height="44" rx="8" fill="#DCEAFE" stroke="#F97316" stroke-width="1.5"/><text x="440" y="267" font-weight="600" fill="#1E3A8A">Secret vault</text><text x="440" y="283" font-size="10" fill="#9A3412">held, discarded</text>
+<rect x="512" y="248" width="100" height="44" rx="8" fill="#FDE8E0" stroke="#E4572E" stroke-width="1.5"/><text x="562" y="267" font-weight="600" fill="#7C2D12">Rate limiter</text><text x="562" y="283" font-size="10" fill="#9A3B1C">quota exceeded</text>
+<rect x="634" y="248" width="100" height="44" rx="22" fill="#FDE8E0" stroke="#E4572E" stroke-width="1.5"/><text x="684" y="267" font-weight="600" fill="#7C2D12">429 throttled</text><text x="684" y="283" font-size="10" fill="#9A3B1C">retry after 60 s</text>
+<g stroke="#22A559" stroke-width="2" fill="none" class="flow" marker-end="url(#mk-g)"><path d="M124 270 H144"/><path d="M246 270 H266"/><path d="M368 270 H388"/><path d="M490 270 H510"/></g>
+<path d="M612 270 H632" stroke="#E4572E" stroke-width="2" fill="none" class="flow" marker-end="url(#mk-r)"/>
+<path d="M734 270 H770" stroke="#3B82F6" stroke-width="1.5" fill="none" class="flow audit" marker-end="url(#mk-b)"/>
+
+<!-- shared audit log -->
+<rect x="772" y="10" width="118" height="298" rx="10" fill="#FFF7ED" stroke="#F97316" stroke-width="1.5"/>
+<text x="831" y="140" font-weight="700" fill="#9A3412">Compliance</text><text x="831" y="156" font-weight="700" fill="#9A3412">audit log</text>
+<text x="831" y="180" font-size="10" fill="#9A3412">same trace ID,</text><text x="831" y="194" font-size="10" fill="#9A3412">same schema,</text><text x="831" y="208" font-size="10" fill="#9A3412">every outcome</text>
+</g>
+</svg>
+</div>
+<div class="why-box">
+<h3>Why three paths, one record</h3>
+<ul>
+<li><b>Green, red and blue mean the same thing everywhere.</b> Green is traffic that passed every check, red is traffic the gateway stopped, and blue is evidence. The same colors are used in the brief's Mermaid flow, so leadership and client reviewers read both documents the same way.</li>
+<li><b>Blocked requests fail closed and early.</b> A denied request never gets a credential and never reaches the tool, so a prompt-injected or misconfigured agent cannot "try its luck" against a downstream system.</li>
+<li><b>Throttling protects the tool, not just the budget.</b> A runaway loop is stopped at the gateway with a clear <code>429</code> and retry time, so the downstream CRM or database never absorbs the burst, and the operations team is alerted from the audit stream.</li>
+</ul>
+</div>
+
+<h2>3. Control plane and data plane</h2>
+<div class="diagram-box">
+<svg viewBox="0 0 900 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Layered architecture: agent layer on top, the gateway data plane and the control plane in the middle, downstream MCP tools and observability at the bottom.">
+<g font-size="12" text-anchor="middle">
+<!-- agent layer -->
+<rect x="10" y="10" width="880" height="86" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="28" y="30" text-anchor="start" class="lbl">Agent layer</text>
+<rect x="40" y="38" width="260" height="46" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="170" y="57" font-size="13" font-weight="600" fill="#3730A3">Customer-facing agents</text><text x="170" y="74" font-size="10.5" fill="#4C3FBF">chat, email, voice</text>
+<rect x="320" y="38" width="260" height="46" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="450" y="57" font-size="13" font-weight="600" fill="#3730A3">Employee copilots</text><text x="450" y="74" font-size="10.5" fill="#4C3FBF">IT, HR, finance</text>
+<rect x="600" y="38" width="260" height="46" rx="8" fill="#EDEBFB" stroke="#6A5ACD" stroke-width="1.5"/><text x="730" y="57" font-size="13" font-weight="600" fill="#3730A3">Workflow agents</text><text x="730" y="74" font-size="10.5" fill="#4C3FBF">scheduled, event-driven</text>
+
+<line x1="290" y1="96" x2="290" y2="116" stroke="#666" stroke-width="1.5" marker-end="url(#mk-k)"/>
+<text x="300" y="111" text-anchor="start" font-size="11" fill="#555">one governed MCP endpoint</text>
+
+<!-- data plane -->
+<rect x="10" y="118" width="560" height="190" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="28" y="138" text-anchor="start" class="lbl">Gateway data plane · every request</text>
+<rect x="24" y="150" width="122" height="56" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="85" y="173" font-weight="600" fill="#1E3A8A">Identity</text><text x="85" y="190" font-size="10" fill="#1E3A8A">verify agent + user</text>
+<rect x="158" y="150" width="122" height="56" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="219" y="173" font-weight="600" fill="#1E3A8A">Policy enforcement</text><text x="219" y="190" font-size="10" fill="#1E3A8A">RBAC + ABAC</text>
+<rect x="292" y="150" width="122" height="56" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="353" y="173" font-weight="600" fill="#1E3A8A">Credential injection</text><text x="353" y="190" font-size="10" fill="#1E3A8A">short-lived, scoped</text>
+<rect x="426" y="150" width="122" height="56" rx="8" fill="#DCEAFE" stroke="#3B82F6" stroke-width="1.5"/><text x="487" y="173" font-weight="600" fill="#1E3A8A">Limits &amp; guardrails</text><text x="487" y="190" font-size="10" fill="#1E3A8A">quotas, content checks</text>
+<g stroke="#666" stroke-width="1.5" marker-end="url(#mk-k)"><line x1="146" y1="178" x2="156" y2="178"/><line x1="280" y1="178" x2="290" y2="178"/><line x1="414" y1="178" x2="424" y2="178"/></g>
+<rect x="24" y="226" width="256" height="64" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="152" y="252" font-weight="600" fill="#004D40">Human-in-the-loop hold</text><text x="152" y="270" font-size="10.5" fill="#00695C">high-impact actions wait for a named approver</text>
+<rect x="292" y="226" width="256" height="64" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="420" y="252" font-weight="600" fill="#004D40">Response filtering</text><text x="420" y="270" font-size="10.5" fill="#00695C">redacts sensitive fields on the way back</text>
+
+<!-- control plane -->
+<rect x="590" y="118" width="300" height="190" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="608" y="138" text-anchor="start" class="lbl">Control plane · configuration</text>
+<g text-anchor="start">
+<rect x="606" y="148" width="268" height="34" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="618" y="170" font-weight="600" fill="#004D40">Identity provider</text><text x="862" y="170" text-anchor="end" font-size="10.5" fill="#00695C">SSO + workload IDs</text>
+<rect x="606" y="188" width="268" height="34" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="618" y="210" font-weight="600" fill="#004D40">Policy-as-code repo</text><text x="862" y="210" text-anchor="end" font-size="10.5" fill="#00695C">versioned, reviewed</text>
+<rect x="606" y="228" width="268" height="34" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="618" y="250" font-weight="600" fill="#004D40">Secret vault</text><text x="862" y="250" text-anchor="end" font-size="10.5" fill="#00695C">leases, rotation</text>
+<rect x="606" y="268" width="268" height="34" rx="8" fill="#CCEEEB" stroke="#00897B" stroke-width="1.5"/><text x="618" y="290" font-weight="600" fill="#004D40">Approval workflow</text><text x="862" y="290" text-anchor="end" font-size="10.5" fill="#00695C">named approvers</text>
+</g>
+<line x1="590" y1="213" x2="574" y2="213" stroke="#00897B" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#mk-t)"/>
+
+<line x1="290" y1="308" x2="290" y2="328" stroke="#666" stroke-width="1.5" marker-end="url(#mk-k)"/>
+<text x="300" y="323" text-anchor="start" font-size="11" fill="#555">scoped credential attached at dispatch</text>
+
+<!-- tools -->
+<rect x="10" y="330" width="560" height="96" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="28" y="350" text-anchor="start" class="lbl">Downstream MCP tools</text>
+<rect x="24" y="360" width="122" height="54" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="85" y="382" font-weight="600" fill="#14532D">SaaS apps</text><text x="85" y="399" font-size="10" fill="#14532D">CRM, ticketing</text>
+<rect x="158" y="360" width="122" height="54" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="219" y="382" font-weight="600" fill="#14532D">Data platforms</text><text x="219" y="399" font-size="10" fill="#14532D">warehouse, lake</text>
+<rect x="292" y="360" width="122" height="54" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="353" y="382" font-weight="600" fill="#14532D">Internal APIs</text><text x="353" y="399" font-size="10" fill="#14532D">HR, finance, ops</text>
+<rect x="426" y="360" width="122" height="54" rx="8" fill="#DCF5E3" stroke="#22A559" stroke-width="1.5"/><text x="487" y="382" font-weight="600" fill="#14532D">Files &amp; knowledge</text><text x="487" y="399" font-size="10" fill="#14532D">documents, wikis</text>
+
+<!-- observability -->
+<rect x="590" y="330" width="300" height="96" rx="14" fill="none" stroke="#aaa" stroke-dasharray="4 3"/>
+<text x="608" y="350" text-anchor="start" class="lbl">Observability &amp; evidence</text>
+<rect x="606" y="360" width="130" height="54" rx="8" fill="#FFF7ED" stroke="#F97316" stroke-width="1.5"/><text x="671" y="382" font-weight="600" fill="#9A3412">Audit log</text><text x="671" y="399" font-size="10" fill="#9A3412">append-only</text>
+<rect x="744" y="360" width="130" height="54" rx="8" fill="#FFF7ED" stroke="#F97316" stroke-width="1.5"/><text x="809" y="382" font-weight="600" fill="#9A3412">Security export</text><text x="809" y="399" font-size="10" fill="#9A3412">SIEM, GRC tools</text>
+<line x1="736" y1="387" x2="742" y2="387" stroke="#666" stroke-width="1.5"/>
+<path d="M548 258 H580 V387 H604" fill="none" stroke="#3B82F6" stroke-width="1.5" class="flow audit" marker-end="url(#mk-b)"/>
+</g>
+</svg>
+</div>
+<div class="why-box">
+<h3>Why separate the planes</h3>
+<ul>
+<li><b>The data plane decides; the control plane defines.</b> The gateway evaluates every request in milliseconds against configuration it already holds. Identities, policies, secrets and approval rules are managed separately, so a policy change is a reviewed commit, not a gateway redeployment.</li>
+<li><b>Policy as code makes governance reviewable.</b> Access rules live in a versioned repository with peer review and history. Every audit record names the policy version that made the decision, which is exactly what an auditor asks for.</li>
+<li><b>Humans stay in the loop where it matters.</b> High-impact operations, such as bulk exports, deletions or payments, pause in the data plane until a named approver responds through the approval workflow, and that decision joins the same audit trail.</li>
+<li><b>Evidence leaves through one exit.</b> The audit log is append-only and exports to the client's existing security monitoring and GRC tools, so the gateway adds evidence to their program instead of creating a new silo.</li>
+</ul>
+</div>
+
+<script>
+(() => {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('gw');
+  const gRoutes = document.getElementById('routes');
+  const gHL = document.getElementById('hl');
+  const gPk = document.getElementById('pk');
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const G = '#22A559', RD = '#E4572E', B = '#3B82F6';
+  const AY = [99, 189, 279], TY = [99, 189, 279], TX = 817, SY = 189;
+  const SX = { id: 254, pol: 379, vault: 504, rl: 629 };
+  const AGENTS = [
+    { name: 'Support agent', role: 'support-tier1', user: 'support-12' },
+    { name: 'Analyst agent', role: 'data-analyst', user: 'analyst-07' },
+    { name: 'Ops copilot', role: 'it-operator', user: 'ops-03' }
+  ];
+  const TOOLS = [
+    { name: 'CRM & ticketing', ops: ['crm.get_ticket', 'crm.update_ticket'] },
+    { name: 'Data warehouse', ops: ['warehouse.query', 'warehouse.describe'] },
+    { name: 'Internal APIs', ops: ['hr.lookup_employee', 'finance.get_invoice'] }
+  ];
+
+  // ---- Route geometry (matches the static lines in the SVG) ----
+  const R = {
+    in: i => `M145 ${AY[i] + 8} C 175 ${AY[i] + 8} 172 ${SY} 200 ${SY} L${SX.id} ${SY}`,
+    seg: (a, b) => `M${SX[a]} ${SY} L${SX[b]} ${SY}`,
+    toStage: (i, s) => R.in(i) + ` L${SX[s]} ${SY}`,
+    out: j => `M${SX.rl} ${SY} L683 ${SY} C 712 ${SY} 712 ${TY[j]} 740 ${TY[j]} L${TX} ${TY[j]}`,
+    full: (i, j) => R.in(i) + ` L683 ${SY} C 712 ${SY} 712 ${TY[j]} 740 ${TY[j]} L${TX} ${TY[j]}`,
+    back: (j, i) => `M${TX} ${TY[j]} L740 ${TY[j]} C 712 ${TY[j]} 712 ${SY} 683 ${SY} L200 ${SY} C 172 ${SY} 175 ${AY[i] + 8} 145 ${AY[i] + 8}`,
+    up: s => `M${SX[s]} ${SY} L${SX[s]} 89`,
+    ret: (s, i) => `M${SX[s]} 89 L${SX[s]} 66 L172 66 L172 ${AY[i] - 12} L145 ${AY[i] - 12}`,
+    audit: s => `M${SX[s]} ${SY + 36} L${SX[s]} 404`,
+    auditTool: j => `M${TX} ${TY[j]} L903 ${TY[j]} L903 418 L683 418`
+  };
+
+  // ---- Packet engine ----
+  const cache = new Map();
+  function route(d) {
+    if (!cache.has(d)) {
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', d);
+      gRoutes.appendChild(p);
+      cache.set(d, { p, len: p.getTotalLength() });
+    }
+    return cache.get(d);
+  }
+  const live = [];
+  let raf = 0;
+  const ease = t => (t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+  function move(d, { color = G, r = 6, speed = 0.22, ambient = false } = {}) {
+    const { p, len } = route(d);
+    return new Promise(res => {
+      const c = document.createElementNS(NS, 'circle');
+      const p0 = p.getPointAtLength(0);
+      c.setAttribute('r', r); c.setAttribute('fill', color);
+      c.setAttribute('cx', p0.x); c.setAttribute('cy', p0.y);
+      c.setAttribute('class', ambient ? 'pkt amb' : 'pkt');
+      gPk.appendChild(c);
+      live.push({ c, p, len, t0: performance.now(), dur: reduce ? 1 : len / speed, res, ambient });
+      if (!raf) raf = requestAnimationFrame(tick);
+    });
+  }
+  function tick(now) {
+    for (let k = live.length - 1; k >= 0; k--) {
+      const o = live[k];
+      const f = Math.min(1, (now - o.t0) / o.dur);
+      const pt = o.p.getPointAtLength((o.ambient ? f : ease(f)) * o.len);
+      o.c.setAttribute('cx', pt.x); o.c.setAttribute('cy', pt.y);
+      if (f >= 1) { o.c.remove(); live.splice(k, 1); o.res(); }
+    }
+    raf = live.length ? requestAnimationFrame(tick) : 0;
+  }
+  const sleep = ms => new Promise(r => setTimeout(r, reduce ? Math.min(ms, 120) : ms));
+
+  // ---- Diagram state ----
+  const nodes = {};
+  svg.querySelectorAll('[data-node]').forEach(g => { nodes[g.dataset.node] = g; });
+  const STATE_COLOR = { active: '#1E3A8A', ok: '#14532D', bad: '#9A3B1C', hold: '#9A3412' };
+  function mark(key, state, txt, color) {
+    const g = nodes[key];
+    g.classList.remove('active', 'ok', 'bad', 'hold');
+    if (state) g.classList.add(state);
+    if (state === 'muted') g.classList.remove('on'); else g.classList.add('on');
+    const st = g.querySelector('.st');
+    if (st && txt !== undefined) { st.textContent = txt; st.setAttribute('fill', color || STATE_COLOR[state] || '#64748B'); }
+  }
+  function resetNodes() {
+    Object.values(nodes).forEach(g => {
+      g.classList.remove('active', 'ok', 'bad', 'hold', 'on', 'ping');
+      const st = g.querySelector('.st'); if (st) st.textContent = '';
+    });
+  }
+  function hl(d, kind) {
+    const p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', d); p.setAttribute('class', 'hl ' + kind);
+    gHL.appendChild(p);
+  }
+  const clearHL = () => { gHL.textContent = ''; };
+
+  // ---- Panels ----
+  const stepsEl = document.getElementById('steps');
+  const ICON = { pending: '', run: '…', ok: '✓', bad: '✕', skip: '–', hold: '!' };
+  function step(n, state, detail) {
+    const li = stepsEl.querySelector(`[data-step="${n}"]`);
+    li.className = state === 'pending' ? '' : state;
+    li.querySelector('.ic').textContent = ICON[state];
+    if (detail) li.querySelector('.d').textContent = detail;
+  }
+  function resetSteps() { for (let n = 1; n <= 6; n++) step(n, 'pending', 'Waiting'); }
+  const scTitle = document.getElementById('sc-title');
+  const scResult = document.getElementById('sc-result');
+  const announce = document.getElementById('announce');
+  function result(label, cls) { scResult.textContent = label; scResult.className = 'chip ' + cls; announce.textContent = scTitle.textContent + ': ' + label; }
+
+  const counts = { ok: 0, deny: 0, thr: 0, audit: 0 };
+  function bump(k) { counts[k]++; document.getElementById('c-' + k).textContent = counts[k].toLocaleString(); }
+
+  const logEl = document.getElementById('log');
+  const pad = n => String(n).padStart(2, '0');
+  const now = () => { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+  const DCLS = { ALLOW: 'allow', DENY: 'deny', THROTTLE: 'throttle' };
+  function log(decision, who, why, scenario) {
+    const empty = document.getElementById('log-empty'); if (empty) empty.remove();
+    const row = document.createElement('div');
+    row.className = 'lrow' + (scenario ? ' sc' : '');
+    const tm = document.createElement('span'); tm.className = 'tm'; tm.textContent = now();
+    const ch = document.createElement('span'); ch.className = 'chip ' + DCLS[decision]; ch.textContent = decision;
+    const w = document.createElement('span'); w.textContent = who;
+    const y = document.createElement('span'); y.className = 'why'; y.textContent = why;
+    row.append(tm, ch, w, y);
+    logEl.prepend(row);
+    while (logEl.children.length > 14) logEl.lastChild.remove();
+  }
+  function auditDrop(s, ambient) {
+    return move(R.audit(s), { color: B, r: ambient ? 3.5 : 4.5, speed: 0.35, ambient }).then(landAudit);
+  }
+  function landAudit() {
+    bump('audit');
+    const a = nodes.audit; a.classList.add('ping');
+    setTimeout(() => a.classList.remove('ping'), 260);
+  }
+  const traceId = () => 'tr-' + Math.random().toString(16).slice(2, 8);
+  const rand = n => Math.floor(Math.random() * n);
+
+  // ---- Ambient "live" traffic ----
+  let liveOn = !reduce, busy = false, timer = 0, resumeT = 0;
+  const liveBtn = document.getElementById('b-live');
+  function schedule() {
+    clearTimeout(timer);
+    if (!liveOn || busy) return;
+    timer = setTimeout(() => { if (!document.hidden) spawn(); schedule(); }, 650 + Math.random() * 700);
+  }
+  function spawn() {
+    const i = rand(3), j = rand(3), a = AGENTS[i], t = TOOLS[j], op = t.ops[rand(2)];
+    const roll = Math.random();
+    const opt = { ambient: true, r: 4.5, speed: 0.3 };
+    if (roll < 0.8) {
+      move(R.full(i, j), opt).then(() => {
+        if (busy) return;
+        bump('ok');
+        log('ALLOW', `${a.name} → ${op}`, `role ${a.role} · scoped credential · ${20 + rand(70)}/100 per min`);
+        move(R.auditTool(j), { color: B, r: 3.5, speed: 0.4, ambient: true }).then(landAudit);
+      });
+    } else if (roll < 0.92) {
+      move(R.toStage(i, 'pol'), opt).then(() => move(R.up('pol'), { ...opt, color: RD })).then(() => {
+        if (busy) return;
+        bump('deny');
+        log('DENY', `${a.name} → ${t.ops[1]}`, `role ${a.role} has no grant · default deny`);
+        auditDrop('pol', true);
+      });
+    } else {
+      move(R.toStage(i, 'rl'), opt).then(() => move(R.up('rl'), { ...opt, color: RD })).then(() => {
+        if (busy) return;
+        bump('thr');
+        log('THROTTLE', `${a.name} → ${op}`, 'per-minute quota exceeded · retry after 30 s');
+        auditDrop('rl', true);
+      });
+    }
+  }
+  function setLive(on) {
+    liveOn = on;
+    liveBtn.setAttribute('aria-pressed', String(on));
+    liveBtn.textContent = on ? 'Pause live traffic' : 'Resume live traffic';
+    if (on && !busy) { clearTimeout(resumeT); backToLive(); }
+    else clearTimeout(timer);
+  }
+  function backToLive() {
+    svg.classList.remove('focus'); resetNodes(); clearHL();
+    scTitle.textContent = 'Live traffic is flowing. Pick a simulation above to follow one request step by step.';
+    scResult.textContent = 'LIVE'; scResult.className = 'chip idle';
+    schedule();
+  }
+  liveBtn.addEventListener('click', () => setLive(!liveOn));
+
+  // ---- Scenarios ----
+  const btns = ['b-allow', 'b-deny', 'b-rate'].map(id => document.getElementById(id));
+  async function run(fn) {
+    if (busy) return;
+    busy = true; clearTimeout(timer); clearTimeout(resumeT);
+    btns.forEach(b => { b.disabled = true; });
+    resetNodes(); clearHL(); resetSteps(); svg.classList.add('focus'); nodes.audit.classList.add('on');
+    scResult.textContent = 'RUNNING'; scResult.className = 'chip idle';
+    try { await fn(); } finally {
+      busy = false;
+      btns.forEach(b => { b.disabled = false; });
+      if (liveOn) resumeT = setTimeout(backToLive, 9000);
+    }
+  }
+  async function gate(key, n, state, txt, detail) {
+    mark(key, 'active', 'checking…');
+    step(n, 'run', 'Evaluating…');
+    await sleep(650);
+    mark(key, state, txt);
+    step(n, state, detail);
+  }
+
+  async function scAllowed() {
+    const i = 1, j = 1, a = AGENTS[i], tr = traceId();
+    scTitle.textContent = 'Authorized request · Analyst agent → warehouse.query (read)';
+    mark('a' + i, 'active', 'sending…');
+    hl(R.full(i, j), 'ok');
+    await move(R.in(i));
+    await gate('id', 1, 'ok', '✓ verified', `Workload identity verified. Acting for ${a.user} through a delegated, signed token.`);
+    auditDrop('id');
+    await move(R.seg('id', 'pol'));
+    await gate('pol', 2, 'ok', '✓ allow', 'Role data-analyst may run warehouse.query (read) on Internal data. Policy v12, rule wh-read-03.');
+    auditDrop('pol');
+    await move(R.seg('pol', 'vault'));
+    await gate('vault', 3, 'ok', '✓ 5-min lease', 'Read-only warehouse credential minted (expires in 5 min). Held by the gateway, never sent to the agent.');
+    await move(R.seg('vault', 'rl'));
+    await gate('rl', 4, 'ok', '✓ 42 / 100', 'Within quota: 42 of 100 calls this minute. Input guardrails passed.');
+    auditDrop('rl');
+    await move(R.out(j));
+    mark('t' + j, 'ok', '✓ 200 OK');
+    step(5, 'ok', 'Query executed: 128 rows returned, 2 sensitive columns redacted before the response reaches the model.');
+    await move(R.back(j, i), { speed: 0.45 });
+    mark('a' + i, 'ok', '✓ response received');
+    await move(R.auditTool(j), { color: B, r: 4.5, speed: 0.35 }); landAudit();
+    step(6, 'ok', `Trace ${tr} recorded: identity, policy version, decision, credential lease, latency 184 ms.`);
+    mark('audit', '', undefined);
+    bump('ok');
+    log('ALLOW', 'Analyst agent → warehouse.query', `${tr} · role data-analyst · policy v12 · lease 5 min · 2 fields redacted`, true);
+    result('ALLOWED', 'allow');
+  }
+
+  async function scDenied() {
+    const i = 0, j = 2, a = AGENTS[i], tr = traceId();
+    scTitle.textContent = 'Unauthorized role · Support agent → hr.export_salaries';
+    mark('a' + i, 'active', 'sending…');
+    hl(R.toStage(i, 'pol'), 'ok');
+    await move(R.in(i));
+    await gate('id', 1, 'ok', '✓ verified', `Support agent verified. Acting for ${a.user}.`);
+    auditDrop('id');
+    await move(R.seg('id', 'pol'));
+    mark('pol', 'active', 'checking…'); step(2, 'run', 'Evaluating…');
+    await sleep(800);
+    mark('pol', 'bad', '✕ deny');
+    step(2, 'bad', 'Role support-tier1 has no grant for hr.export_salaries, and the data is classified Restricted. Default deny (policy v12).');
+    const ad = auditDrop('pol');
+    step(3, 'skip', 'Skipped. No credential is issued for a denied request.');
+    step(4, 'skip', 'Skipped.');
+    step(5, 'skip', 'Internal APIs were never contacted.');
+    mark('t' + j, 'muted', 'not contacted', '#64748B');
+    hl(R.up('pol'), 'bad'); hl(R.ret('pol', i), 'bad');
+    await move(R.up('pol'), { color: RD });
+    mark('deny', 'bad');
+    await move(R.ret('pol', i), { color: RD });
+    mark('a' + i, 'bad', '✕ 403 Forbidden');
+    await ad;
+    mark('audit', '', undefined);
+    step(6, 'ok', `Trace ${tr}: denied attempt recorded with identity, role and policy version, and flagged for security review.`);
+    bump('deny');
+    log('DENY', 'Support agent → hr.export_salaries', `${tr} · role support-tier1 · no grant · Restricted data · flagged`, true);
+    result('BLOCKED', 'deny');
+  }
+
+  async function scThrottled() {
+    const i = 2, j = 0, tr = traceId();
+    scTitle.textContent = 'Rate-limit trigger · Ops copilot → crm.update_ticket (runaway loop)';
+    mark('a' + i, 'active', 'calling in a loop');
+    hl(R.toStage(i, 'rl'), 'ok');
+    await move(R.in(i));
+    await gate('id', 1, 'ok', '✓ verified', 'Ops copilot verified. Acting for ops-03.');
+    await move(R.seg('id', 'pol'));
+    await gate('pol', 2, 'ok', '✓ allow', 'Role it-operator may update tickets. Allowed by policy v12.');
+    await move(R.seg('pol', 'vault'));
+    await gate('vault', 3, 'hold', '◔ held', 'Write credential prepared, but held until every remaining check passes.');
+    await move(R.seg('vault', 'rl'));
+    mark('rl', 'active', '120 / 120');
+    step(4, 'run', 'Call 121 this minute. The limit is 120 calls per minute for this agent and tool.');
+    // the loop keeps firing: more calls pile up behind the first
+    const burst = [0, 1, 2].map(k => sleep(160 + k * 220)
+      .then(() => move(R.toStage(i, 'rl'), { r: 5, speed: 0.55 }))
+      .then(() => move(R.up('rl'), { color: RD, r: 5, speed: 0.4 })));
+    await sleep(700);
+    mark('rl', 'bad', '✕ 429');
+    step(4, 'bad', 'Burst detected: 37 calls in 10 s pushed this agent past 120 calls per minute on crm.update_ticket. Circuit opened for 60 s.');
+    mark('vault', '', 'discarded', '#64748B');
+    step(3, 'skip', 'Prepared credential discarded. It never reached the CRM.');
+    step(5, 'skip', 'CRM & ticketing protected: no calls forwarded during the cool-down.');
+    mark('t' + j, 'muted', 'protected', '#64748B');
+    hl(R.up('rl'), 'bad'); hl(R.ret('rl', i), 'bad');
+    await move(R.up('rl'), { color: RD });
+    mark('thr', 'bad');
+    const ad = auditDrop('rl');
+    await move(R.ret('rl', i), { color: RD });
+    mark('a' + i, 'bad', '✕ 429 · retry in 60 s');
+    await Promise.all([ad, ...burst]);
+    mark('audit', '', undefined);
+    step(6, 'ok', `Trace ${tr}: throttle event recorded and the operations team alerted to a possible agent loop.`);
+    bump('thr');
+    log('THROTTLE', 'Ops copilot → crm.update_ticket', `${tr} · 37 calls in 10 s · limit 120/min · circuit open 60 s · ops alerted`, true);
+    result('THROTTLED', 'throttle');
+  }
+
+  document.getElementById('b-allow').addEventListener('click', () => run(scAllowed));
+  document.getElementById('b-deny').addEventListener('click', () => run(scDenied));
+  document.getElementById('b-rate').addEventListener('click', () => run(scThrottled));
+
+  if (reduce) {
+    liveBtn.textContent = 'Resume live traffic'; liveBtn.setAttribute('aria-pressed', 'false');
+    scTitle.textContent = 'Live traffic is paused because reduced motion is on. Pick a simulation to follow one request step by step.';
+    scResult.textContent = 'PAUSED';
+  }
+  schedule();
+})();
+</script>
+
+</body>
+</html>
