@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Gateway on Azure APIM</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0 auto; padding: 40px; background: #fff; color: #1f1f1f; max-width: 980px; line-height: 1.5; }
+  h1 { font-size: 26px; margin-bottom: 4px; }
+  p.sub { color: #555; margin-top: 0; }
+  h2 { font-size: 19px; margin-top: 52px; padding-bottom: 8px; border-bottom: 2px solid #e5e5e5; }
+  .diagram-box { border: 1px solid #ddd; border-radius: 10px; padding: 20px; margin: 16px 0 8px; overflow-x: auto; background: #fafafa; }
+  svg.dg { width: 100%; min-width: 660px; height: auto; display: block; margin: 0 auto; }
+  .note { font-size: 13px; color: #666; margin-top: 4px; }
+
+  /* SVG text */
+  .t { font-size: 13px; font-weight: 600; text-anchor: middle; }
+  .s { font-size: 10.5px; text-anchor: middle; }
+  .lbl { font-size: 12px; font-weight: 600; fill: #555; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .flow { stroke-dasharray: 7 5; animation: flow12 1s linear infinite; }
+  .flow.audit { stroke-dasharray: 4 4; animation: flow8 1.4s linear infinite; }
+  @keyframes flow12 { to { stroke-dashoffset: -12; } }
+  @keyframes flow8 { to { stroke-dashoffset: -8; } }
+
+  /* Node states */
+  .node rect { transition: fill .25s, stroke .25s, stroke-width .25s; }
+  .node.active rect { stroke: #3B82F6; stroke-width: 3; }
+  .node.ok rect { stroke: #22A559; stroke-width: 2.6; fill: #EAF8EE; }
+  .node.bad rect { stroke: #E4572E; stroke-width: 2.6; fill: #FDE8E0; }
+  .node.hold rect { stroke: #F97316; stroke-width: 2.6; fill: #FFF7ED; }
+  .node.ping rect { stroke-width: 2.6; filter: drop-shadow(0 0 4px rgba(59,130,246,.45)); }
+  .pkt { stroke: #fff; stroke-width: 1.5; }
+  .badge { transition: opacity .3s; }
+  .msg { transition: opacity .35s; }
+
+  /* Controls + caption */
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .btn { font: inherit; font-size: 13px; font-weight: 600; color: #1f1f1f; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 7px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
+  .btn:hover { background: #F1F5F9; }
+  .btn:focus-visible { outline: 2px solid #3B82F6; outline-offset: 2px; }
+  .btn.on { background: #1E3A8A; color: #fff; border-color: #1E3A8A; }
+  .btn .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .cap { margin-top: 12px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 9px 14px; font-size: 14px; min-height: 22px; display: flex; gap: 10px; align-items: center; }
+  .cap .n { font-weight: 700; color: #1E3A8A; font-variant-numeric: tabular-nums; min-width: 18px; }
+  .chip { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 1px 8px; border-radius: 10px; white-space: nowrap; }
+  .chip.allow { background: #DCF5E3; color: #14532D; }
+  .chip.deny { background: #FDE8E0; color: #7C2D12; }
+  .chip.throttle { background: #FFF7ED; color: #9A3412; }
+  .chip.info { background: #EEF2FF; color: #3730A3; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12.5px; color: #555; margin-top: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+  @media (max-width: 640px) { body { padding: 20px 16px; } .diagram-box { padding: 12px; } }
+</style>
+</head>
+<body>
+
+<h1>MCP Gateway on Azure API Management</h1>
+<p class="sub">Animated walkthrough: how an agent's MCP tool call travels through Azure, gets governed, and gets logged.</p>
+
+<!-- Shared arrow markers -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="mk-k" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="mk-b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#3B82F6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="mk-p" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#6A5ACD" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="mk-t" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#00897B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  </defs>
+</svg>
+
+<h2>1. End-to-end request flow</h2>
+<div class="diagram-box">
+  <div class="controls" id="d1ctl"></div>
+  <svg class="dg" id="d1" viewBox="0 0 940 540" role="img" aria-label="Animated Azure architecture: agent, Front Door WAF, API Management policy chain, private MCP servers, logging"></svg>
+  <div class="cap" id="d1cap"></div>
+  <div class="legend"><span><i style="background:#22A559"></i>request / allowed</span><span><i style="background:#6A5ACD"></i>token</span><span><i style="background:#E4572E"></i>denied</span><span><i style="background:#F97316"></i>throttled</span><span><i style="background:#3B82F6"></i>logs &amp; metrics</span></div>
+</div>
+
+<h2>2. Inside the APIM policy pipeline</h2>
+<div class="diagram-box">
+  <svg class="dg" id="d2" viewBox="0 0 940 380" role="img" aria-label="Animated APIM policy sections: inbound, backend, outbound, on-error"></svg>
+  <div class="cap" id="d2cap"></div>
+</div>
+
+<h2>3. One MCP session through the gateway</h2>
+<div class="diagram-box">
+  <svg class="dg" id="d3" viewBox="0 0 940 470" role="img" aria-label="Animated sequence: token, initialize, tools/list filtered, tools/call streamed"></svg>
+</div>
+
+<h2>4. Two ways to put tools behind APIM</h2>
+<div class="diagram-box">
+  <svg class="dg" id="d4" viewBox="0 0 940 300" role="img" aria-label="Animated: REST API exposed as MCP server, and existing MCP server passthrough, both registered in API Center"></svg>
+</div>
+<p class="note">Left: APIM turns selected REST operations into MCP tools (the green call becomes a blue HTTP call). Right: APIM proxies an MCP server you already run and applies the same policies.</p>
+
+<script>
+(() => {
+  const NS = 'http://www.w3.org/2000/svg';
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const C = { g: '#22A559', r: '#E4572E', o: '#F97316', b: '#3B82F6', p: '#6A5ACD', t: '#00897B' };
+  const P = {
+    purple: { f: '#EDEBFB', s: '#6A5ACD', t: '#3730A3' },
+    blue:   { f: '#DCEAFE', s: '#3B82F6', t: '#1E3A8A' },
+    teal:   { f: '#CCEEEB', s: '#00897B', t: '#004D40' },
+    coral:  { f: '#FDE8E0', s: '#E4572E', t: '#7C2D12' },
+    green:  { f: '#DCF5E3', s: '#22A559', t: '#14532D' },
+    orange: { f: '#FFF7ED', s: '#F97316', t: '#9A3412' },
+    white:  { f: '#FFFFFF', s: '#3B82F6', t: '#1E3A8A' },
+    gray:   { f: '#F1F5F9', s: '#94A3B8', t: '#334155' }
+  };
+
+  // ---------- SVG helpers ----------
+  function el(tag, a, parent) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in a) e.setAttribute(k, a[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function txt(parent, x, y, s, cls, fill) {
+    const e = el('text', { x, y, class: cls }, parent);
+    if (fill) e.setAttribute('fill', fill);
+    e.textContent = s;
+    return e;
+  }
+  function box(g, { id, x, y, w, h, p = 'blue', t, s, s2, rx = 8, mono = false, ts }) {
+    const pal = P[p];
+    const n = el('g', { class: 'node' }, g);
+    if (id) n.id = id;
+    el('rect', { x, y, width: w, height: h, rx, fill: pal.f, stroke: pal.s, 'stroke-width': 1.5 }, n);
+    const lines = [t, s, s2].filter(Boolean);
+    let ty = y + h / 2 - 7 * (lines.length - 1) + 4.5;
+    const tt = txt(n, x + w / 2, ty, t, 't' + (mono ? ' mono' : ''), pal.t);
+    if (ts) tt.style.fontSize = ts + 'px';
+    if (s) txt(n, x + w / 2, ty + 15, s, 's', '#444');
+    if (s2) txt(n, x + w / 2, ty + 29, s2, 's', '#444');
+    return n;
+  }
+  function line(g, d, { c = '#999', w = 1.5, mk, dash, cls } = {}) {
+    const a = { d, fill: 'none', stroke: c, 'stroke-width': w };
+    if (mk) a['marker-end'] = `url(#${mk})`;
+    if (dash) a['stroke-dasharray'] = dash;
+    if (cls) a.class = cls;
+    return el('path', a, g);
+  }
+  function group(g, x, y, w, h, label, { fill = 'none', stroke = '#aaa', dash = '6 4', lx, ly, anchor = 'start', lfill = '#555' } = {}) {
+    el('rect', { x, y, width: w, height: h, rx: 14, fill, stroke, 'stroke-width': 1.5, 'stroke-dasharray': dash }, g);
+    if (label) { const t = txt(g, lx ?? x + 12, ly ?? y + 18, label, 'lbl', lfill); t.setAttribute('text-anchor', anchor); }
+  }
+
+  // ---------- Packet engine ----------
+  const live = [];
+  let raf = 0;
+  const ease = t => (t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+  function tick(now) {
+    for (let i = live.length - 1; i >= 0; i--) {
+      const k = live[i];
+      const t = Math.min(1, (now - k.t0) / k.dur);
+      const pt = k.p.getPointAtLength(k.len * ease(t));
+      k.c.setAttribute('cx', pt.x); k.c.setAttribute('cy', pt.y);
+      if (t >= 1) { k.p.remove(); k.c.remove(); live.splice(i, 1); k.res(); }
+    }
+    raf = live.length ? requestAnimationFrame(tick) : 0;
+  }
+
+  class Stage {
+    constructor(id, w, h) {
+      this.svg = document.getElementById(id);
+      this.base = el('g', {}, this.svg);
+      this.nodes = el('g', {}, this.svg);
+      this.routes = el('g', { visibility: 'hidden' }, this.svg);
+      this.pk = el('g', {}, this.svg);
+      this.gen = 0;
+      this.paused = false;
+      // pause loops while off-screen
+      this.visible = true;
+      new IntersectionObserver(es => { this.visible = es[0].isIntersecting; }, { threshold: .1 }).observe(this.svg);
+    }
+    check(g) { if (g !== this.gen) throw 'cancel'; }
+    move(g, d, { c = C.g, r = 6, speed = .24 } = {}) {
+      this.check(g);
+      const p = el('path', { d, fill: 'none', stroke: 'none' }, this.routes);
+      const len = p.getTotalLength();
+      const p0 = p.getPointAtLength(0);
+      const circ = el('circle', { r, fill: c, cx: p0.x, cy: p0.y, class: 'pkt' }, this.pk);
+      return new Promise(res => {
+        live.push({ c: circ, p, len, t0: performance.now(), dur: reduce ? 1 : Math.max(250, len / speed), res, stage: this });
+        if (!raf) raf = requestAnimationFrame(tick);
+      }).then(() => this.check(g));
+    }
+    async wait(g, ms) {
+      this.check(g);
+      let left = reduce ? Math.min(ms, 400) : ms;
+      while (left > 0) {
+        await new Promise(r => setTimeout(r, 100));
+        this.check(g);
+        if (this.visible && !document.hidden) left -= 100;
+      }
+    }
+    async whenVisible(g) { while (!this.visible || document.hidden) { await new Promise(r => setTimeout(r, 250)); this.check(g); } }
+    set(id, cls) { const n = document.getElementById(id); if (n) { n.classList.remove('ok', 'bad', 'hold', 'active', 'ping'); if (cls) n.classList.add(cls); } }
+    ping(id) { const n = document.getElementById(id); if (!n) return; n.classList.add('ping'); setTimeout(() => n.classList.remove('ping'), 700); }
+    reset() { this.svg.querySelectorAll('.node').forEach(n => n.classList.remove('ok', 'bad', 'hold', 'active', 'ping')); }
+    cancel() {
+      this.gen++;
+      for (let i = live.length - 1; i >= 0; i--) if (live[i].stage === this) { live[i].p.remove(); live[i].c.remove(); live.splice(i, 1); }
+      this.reset();
+    }
+  }
+
+  function caption(id) {
+    const elc = document.getElementById(id);
+    return (n, kind, label, text) => {
+      elc.innerHTML = '';
+      const a = document.createElement('span'); a.className = 'n'; a.textContent = n ?? ''; elc.appendChild(a);
+      if (kind) { const ch = document.createElement('span'); ch.className = 'chip ' + kind; ch.textContent = label; elc.appendChild(ch); }
+      const t = document.createElement('span'); t.textContent = text; elc.appendChild(t);
+    };
+  }
+
+  // =====================================================================
+  // Diagram 1: end-to-end Azure flow
+  // =====================================================================
+  {
+    const S = new Stage('d1');
+    const B = S.base, N = S.nodes;
+    const cap = caption('d1cap');
+
+    // containers
+    group(B, 380, 110, 280, 300, null, { fill: '#F3F7FF', stroke: '#3B82F6', dash: 'none' });
+    txt(B, 520, 134, 'Azure API Management (v2)', 't', '#1E3A8A');
+    txt(B, 520, 150, 'MCP gateway · VNet-integrated', 's', '#444');
+    group(B, 690, 110, 236, 300, 'VNet · Private Link', { lx: 808, ly: 130, anchor: 'middle' });
+
+    // static connectors
+    line(B, 'M90 82 L90 168', { c: C.p, mk: 'mk-p', dash: '5 4' });
+    line(B, 'M130 170 L130 128 L270 128 L270 84', { c: C.t, mk: 'mk-t', dash: '5 4' });
+    line(B, 'M160 190 L198 190', { c: '#666', mk: 'mk-k' });
+    line(B, 'M200 212 L162 212', { c: '#aaa', mk: 'mk-k', dash: '4 3' });
+    line(B, 'M340 190 L398 190', { c: '#666', mk: 'mk-k' });
+    line(B, 'M400 190 L400 396 L676 396', { c: '#B6C8EE', w: 2 });
+    line(B, 'M676 396 L676 174', { c: '#999' });
+    [174, 238, 302, 366].forEach(y => line(B, `M676 ${y} L704 ${y}`, { c: '#666', mk: 'mk-k' }));
+    el('circle', { cx: 676, cy: 396, r: 4.5, fill: '#fff', stroke: '#666', 'stroke-width': 1.5 }, B);
+    txt(B, 676, 425, 'private endpoint', 's', '#666');
+    line(B, 'M445 110 L445 84', { c: '#999', mk: 'mk-k' });
+    line(B, 'M595 110 L595 84', { c: '#999', mk: 'mk-k' });
+    line(B, 'M445 410 L445 448', { c: C.b, cls: 'flow audit' });
+    line(B, 'M510 475 L528 475', { c: C.b, cls: 'flow audit' });
+    line(B, 'M660 475 L688 475', { c: C.b, cls: 'flow audit' });
+    line(B, 'M270 230 L270 522 L595 522 L595 502', { c: C.b, cls: 'flow audit' });
+
+    // nodes
+    box(N, { id: 'n-entra', x: 20, y: 30, w: 140, h: 52, p: 'purple', t: 'Microsoft Entra ID', s: 'OAuth 2.1 tokens' });
+    box(N, { id: 'n-apic', x: 200, y: 30, w: 140, h: 52, p: 'teal', t: 'Azure API Center', s: 'MCP server registry' });
+    box(N, { id: 'n-kv', x: 380, y: 30, w: 130, h: 52, p: 'purple', t: 'Key Vault', s: 'secrets · named values' });
+    box(N, { id: 'n-cs', x: 530, y: 30, w: 130, h: 52, p: 'coral', t: 'AI Content Safety', s: 'prompt shields' });
+    box(N, { id: 'n-agent', x: 20, y: 170, w: 140, h: 60, p: 'blue', t: 'AI agent', s: 'MCP client' });
+    box(N, { id: 'n-fd', x: 200, y: 170, w: 140, h: 60, p: 'orange', t: 'Front Door + WAF', s: 'edge · OWASP rules' });
+    const chips = ['ip-filter', 'validate-jwt · Entra ID', 'rate-limit · quota', 'tool allow-list', 'Content Safety check', 'managed identity → backend'];
+    chips.forEach((t, i) => box(N, { id: 'c' + i, x: 418, y: 186 + i * 34, w: 224, h: 28, p: 'white', t, rx: 6 }));
+    const BK = [
+      { id: 'b0', t: 'Container Apps', s: 'MCP server · Streamable HTTP' },
+      { id: 'b1', t: 'Azure Functions', s: 'MCP server · SSE' },
+      { id: 'b2', t: 'App Service', s: 'MCP server' },
+      { id: 'b3', t: 'REST API', s: 'ops exposed as MCP tools' }
+    ];
+    BK.forEach((b, i) => box(N, { ...b, x: 706, y: 146 + i * 64, w: 204, h: 56, p: 'green' }));
+    box(N, { id: 'n-ai', x: 380, y: 450, w: 130, h: 50, p: 'blue', t: 'Application Insights', s: 'traces · tool metrics' });
+    box(N, { id: 'n-la', x: 530, y: 450, w: 130, h: 50, p: 'blue', t: 'Log Analytics', s: 'audit log' });
+    box(N, { id: 'n-mon', x: 690, y: 450, w: 150, h: 50, p: 'blue', t: 'Azure Monitor', s: 'alerts · workbooks' });
+
+    // response badge under agent
+    const badge = el('g', { class: 'badge', opacity: 0 }, N);
+    const bRect = el('rect', { x: 35, y: 244, width: 110, height: 24, rx: 12, fill: '#DCF5E3' }, badge);
+    const bTxt = txt(badge, 90, 260, '', 't mono');
+    bTxt.style.fontSize = '12px';
+    function showBadge(text, kind) {
+      const k = { ok: ['#DCF5E3', '#14532D'], bad: ['#FDE8E0', '#7C2D12'], hold: ['#FFF7ED', '#9A3412'] }[kind];
+      bRect.setAttribute('fill', k[0]); bTxt.setAttribute('fill', k[1]); bTxt.textContent = text; badge.setAttribute('opacity', 1);
+    }
+    const hideBadge = () => badge.setAttribute('opacity', 0);
+
+    // routes
+    const chipY = i => 200 + i * 34;
+    const R = {
+      toEntra: 'M90 170 L90 82', fromEntra: 'M90 82 L90 170',
+      toApic: 'M130 170 L130 128 L270 128 L270 82', fromApic: 'M270 82 L270 128 L130 128 L130 170',
+      toFd: 'M160 190 L200 190',
+      fdBack: 'M200 212 L160 212',
+      toRail: 'M340 190 L400 190',
+      rail: (a, b) => `M400 ${a === -1 ? 190 : chipY(a)} L400 ${chipY(b)}`,
+      toBk: (j, from) => `M400 ${chipY(from)} L400 396 L676 396 L676 ${174 + j * 64} L706 ${174 + j * 64}`,
+      back: j => `M706 ${174 + j * 64} L676 ${174 + j * 64} L676 168 L366 168 L366 212 L340 212`,
+      deny: i => `M400 ${chipY(i)} L366 ${chipY(i)} L366 212 L340 212`,
+      cs: 'M595 110 L595 82', csBack: 'M595 82 L595 110',
+      kv: 'M445 110 L445 82', kvBack: 'M445 82 L445 110',
+      logGw: 'M445 410 L445 450', logAi: 'M510 475 L530 475', logLa: 'M660 475 L690 475',
+      logFd: 'M270 230 L270 522 L595 522 L595 500'
+    };
+
+    async function token(g) {
+      cap(1, 'info', 'AUTH', 'Agent signs in to Entra ID and gets an access token');
+      S.set('n-agent', 'active');
+      await S.move(g, R.toEntra, { c: C.p });
+      S.set('n-entra', 'ok');
+      await S.move(g, R.fromEntra, { c: C.p, r: 5 });
+    }
+    async function toApim(g, n) {
+      cap(n, 'info', 'CALL', 'tools/call sent over HTTPS with the bearer token');
+      await S.move(g, R.toFd);
+      S.set('n-fd', 'ok');
+      cap(n + 1, 'allow', 'WAF', 'Front Door WAF inspects the request at the edge');
+      await S.wait(g, 400);
+      await S.move(g, R.toRail);
+    }
+    async function chipPass(g, from, to, n, texts) {
+      for (let i = from; i <= to; i++) {
+        await S.move(g, R.rail(i - 1, i), { speed: .14 });
+        S.set('c' + i, 'active');
+        if (texts[i]) cap(n, 'allow', 'POLICY', texts[i]);
+        if (i === 4) { await S.move(g, R.cs, { c: C.p, r: 4.5 }); S.ping('n-cs'); await S.move(g, R.csBack, { c: C.g, r: 4.5 }); }
+        if (i === 5) { await S.move(g, R.kv, { c: C.p, r: 4.5 }); S.ping('n-kv'); await S.move(g, R.kvBack, { c: C.p, r: 4.5 }); }
+        await S.wait(g, 260);
+        S.set('c' + i, 'ok');
+      }
+    }
+    async function logs(g, n, fromFd) {
+      cap(n, 'info', 'LOG', fromFd ? 'Blocked request logged by Front Door' : 'Agent, tool, tokens, latency and decision logged');
+      if (fromFd) { await S.move(g, R.logFd, { c: C.b, r: 5 }); S.ping('n-la'); }
+      else {
+        await S.move(g, R.logGw, { c: C.b, r: 5 }); S.ping('n-ai');
+        await S.move(g, R.logAi, { c: C.b, r: 5 }); S.ping('n-la');
+      }
+      await S.move(g, R.logLa, { c: C.b, r: 5 }); S.ping('n-mon');
+    }
+    const passText = [
+      'IP filter: caller network is trusted',
+      'validate-jwt: token issuer, audience and roles checked',
+      'Under the per-agent rate limit and quota',
+      'Requested tool is on this agent\'s allow-list',
+      'Content Safety: no prompt injection or harmful content',
+      'Backend credential from managed identity / Key Vault'
+    ];
+    let bkTurn = 0;
+
+    const SCN = {
+      allowed: { label: 'Allowed call', dot: C.g, run: async g => {
+        const j = bkTurn++ % 4;
+        cap(1, 'info', 'DISCOVER', 'Agent finds the approved MCP server in API Center');
+        S.set('n-agent', 'active');
+        await S.move(g, R.toApic, { c: C.t, r: 5 }); S.set('n-apic', 'ok');
+        await S.move(g, R.fromApic, { c: C.t, r: 5 });
+        await token(g);
+        await toApim(g, 3);
+        await chipPass(g, 0, 5, 5, passText);
+        cap(6, 'allow', 'FORWARD', 'Forwarded over Private Link to ' + BK[j].t);
+        await S.move(g, R.toBk(j, 5));
+        S.set(BK[j].id, 'ok');
+        await S.wait(g, 400);
+        cap(7, 'allow', '200', 'Result streams back to the agent');
+        const st = [0, 1, 2].map(k => S.wait(g, k * 260).then(() => S.move(g, R.back(j), { r: k ? 4 : 6 })));
+        await Promise.all(st);
+        await S.move(g, R.fdBack);
+        showBadge('200 OK', 'ok'); S.set('n-agent', 'ok');
+        await logs(g, 8);
+      } },
+      noToken: { label: 'Bad token', dot: C.r, run: async g => {
+        await toApim(g, 1);
+        await chipPass(g, 0, 0, 3, passText);
+        await S.move(g, R.rail(0, 1), { speed: .14 });
+        S.set('c1', 'bad');
+        cap(3, 'deny', '401', 'validate-jwt fails: missing or expired token');
+        await S.wait(g, 500);
+        await S.move(g, R.deny(1), { c: C.r }); await S.move(g, R.fdBack, { c: C.r });
+        showBadge('401', 'bad'); S.set('n-agent', 'bad');
+        await logs(g, 4);
+      } },
+      tool: { label: 'Tool not allowed', dot: C.r, run: async g => {
+        await token(g);
+        await toApim(g, 2);
+        await chipPass(g, 0, 2, 4, passText);
+        await S.move(g, R.rail(2, 3), { speed: .14 });
+        S.set('c3', 'bad');
+        cap(4, 'deny', '403', 'Tool hr.delete_employee is not on the allow-list');
+        await S.wait(g, 500);
+        await S.move(g, R.deny(3), { c: C.r }); await S.move(g, R.fdBack, { c: C.r });
+        showBadge('403', 'bad'); S.set('n-agent', 'bad');
+        await logs(g, 5);
+      } },
+      throttle: { label: 'Over quota', dot: C.o, run: async g => {
+        await toApim(g, 1);
+        await chipPass(g, 0, 1, 3, passText);
+        await S.move(g, R.rail(1, 2), { speed: .14 });
+        S.set('c2', 'hold');
+        cap(3, 'throttle', '429', 'Rate limit hit: retry after 30 s');
+        await S.wait(g, 500);
+        await S.move(g, R.deny(2), { c: C.o }); await S.move(g, R.fdBack, { c: C.o });
+        showBadge('429', 'hold'); S.set('n-agent', 'hold');
+        await logs(g, 4);
+      } },
+      unsafe: { label: 'Unsafe prompt', dot: C.r, run: async g => {
+        await toApim(g, 1);
+        await chipPass(g, 0, 3, 3, passText);
+        await S.move(g, R.rail(3, 4), { speed: .14 });
+        S.set('c4', 'active');
+        await S.move(g, R.cs, { c: C.p, r: 4.5 }); S.set('n-cs', 'bad');
+        await S.move(g, R.csBack, { c: C.r, r: 4.5 });
+        S.set('c4', 'bad');
+        cap(4, 'deny', '403', 'Content Safety flags a prompt-injection attempt');
+        await S.wait(g, 500);
+        await S.move(g, R.deny(4), { c: C.r }); await S.move(g, R.fdBack, { c: C.r });
+        showBadge('403', 'bad'); S.set('n-agent', 'bad');
+        await logs(g, 5);
+      } },
+      waf: { label: 'WAF block', dot: C.r, run: async g => {
+        cap(1, 'info', 'CALL', 'Request carries a malicious payload');
+        S.set('n-agent', 'active');
+        await S.move(g, R.toFd, { c: C.r });
+        S.set('n-fd', 'bad');
+        cap(2, 'deny', '403', 'WAF rule blocks it at the edge; APIM never sees it');
+        await S.wait(g, 600);
+        await S.move(g, R.fdBack, { c: C.r });
+        showBadge('403', 'bad'); S.set('n-agent', 'bad');
+        await logs(g, 3, true);
+      } }
+    };
+    const ORDER = ['allowed', 'noToken', 'allowed', 'tool', 'throttle', 'allowed', 'unsafe', 'waf'];
+
+    // controls
+    const ctl = document.getElementById('d1ctl');
+    const btns = {};
+    let auto = true;
+    const autoBtn = document.createElement('button');
+    autoBtn.className = 'btn on'; autoBtn.textContent = '▶ Auto-play';
+    autoBtn.onclick = () => { auto = !auto; autoBtn.classList.toggle('on', auto); if (auto) play(null); };
+    ctl.appendChild(autoBtn);
+    Object.entries(SCN).forEach(([k, v]) => {
+      const b = document.createElement('button');
+      b.className = 'btn';
+      b.innerHTML = `<span class="dot" style="background:${v.dot}"></span>`;
+      b.appendChild(document.createTextNode(v.label));
+      b.onclick = () => { auto = false; autoBtn.classList.remove('on'); play(k); };
+      btns[k] = b; ctl.appendChild(b);
+    });
+
+    async function runOne(g, k) {
+      Object.values(btns).forEach(b => b.classList.remove('on'));
+      btns[k].classList.add('on');
+      S.reset(); hideBadge();
+      await S.whenVisible(g);
+      await SCN[k].run(g);
+      await S.wait(g, 1800);
+    }
+    async function play(k) {
+      S.cancel();
+      const g = S.gen;
+      try {
+        if (k) { await runOne(g, k); btns[k].classList.remove('on'); return; }
+        for (let i = 0; ; i = (i + 1) % ORDER.length) await runOne(g, ORDER[i]);
+      } catch (e) { if (e !== 'cancel') throw e; }
+    }
+    play(null);
+  }
+
+  // =====================================================================
+  // Diagram 2: policy sections
+  // =====================================================================
+  {
+    const S = new Stage('d2');
+    const B = S.base, N = S.nodes;
+    const cap = caption('d2cap');
+
+    group(B, 110, 46, 640, 94, '<inbound>', { fill: '#F3F7FF', stroke: '#3B82F6', dash: 'none', lfill: '#1E3A8A' });
+    group(B, 110, 166, 640, 94, '<outbound>', { fill: '#F3F7FF', stroke: '#3B82F6', dash: 'none', lfill: '#1E3A8A' });
+    group(B, 110, 286, 640, 76, '<on-error>', { fill: '#FFF8F5', stroke: '#E4572E', dash: '6 4', lfill: '#7C2D12' });
+    B.querySelectorAll('text.lbl').forEach(t => t.classList.add('mono'));
+
+    const IN = [['ip-filter', 'trusted ranges'], ['validate-jwt', 'Entra ID token'], ['rate-limit', 'per agent key'], ['tool allow-list', 'tools/call name'], ['content-safety', 'prompt shields'], ['managed identity', 'backend auth']];
+    IN.forEach(([t, s], i) => box(N, { id: 'p' + i, x: 120 + i * 104, y: 80, w: 96, h: 46, p: 'white', t, s, rx: 6, ts: 11.5 }));
+    const OUT = [['log + trace', 'App Insights'], ['emit metrics', 'agent · tool · tokens'], ['redact', 'strip internal headers']];
+    OUT.forEach(([t, s], i) => box(N, { id: 'q' + i, x: 125 + i * 210, y: 200, w: 200, h: 46, p: 'white', t, s, rx: 6 }));
+    box(N, { id: 'p-err', x: 125, y: 312, w: 610, h: 38, p: 'white', t: 'return-response  401 / 403 / 429  +  log the denial', rx: 6 });
+    box(N, { id: 'p-cli', x: 10, y: 80, w: 82, h: 270, p: 'blue', t: 'MCP', s: 'client' });
+    box(N, { id: 'p-bk', x: 790, y: 80, w: 140, h: 166, p: 'green', t: '<backend>', s: 'forward-request', s2: 'MCP server', mono: true });
+
+    line(B, 'M92 103 L118 103', { c: '#666', mk: 'mk-k' });
+    for (let i = 0; i < 5; i++) line(B, `M${216 + i * 104} 103 L${222 + i * 104} 103`, { c: '#666' });
+    line(B, 'M736 103 L788 103', { c: '#666', mk: 'mk-k' });
+    line(B, 'M790 223 L737 223', { c: '#666', mk: 'mk-k' });
+    line(B, 'M125 223 L94 223', { c: '#666', mk: 'mk-k' });
+
+    const codeT = txt(N, 51, 300, '', 't mono'); codeT.style.fontSize = '15px';
+    const cx = i => 168 + i * 104;
+    const R = {
+      inb: (a, b) => `M${a < 0 ? 92 : cx(a)} 103 L${cx(b)} 103`,
+      toBk: 'M688 103 L790 103',
+      outb: 'M790 223 L94 223',
+      deny: i => `M${cx(i)} 103 L${cx(i)} 153 L102 153 L102 331 L125 331`,
+      denyBack: 'M125 331 L94 331'
+    };
+    const SC = [
+      { fail: -1 },
+      { fail: 1, code: '401', kind: 'deny', why: 'validate-jwt rejects the token' },
+      { fail: -1 },
+      { fail: 3, code: '403', kind: 'deny', why: 'tool is not on the allow-list' },
+      { fail: 2, code: '429', kind: 'throttle', why: 'agent exceeded its rate limit' },
+      { fail: 4, code: '403', kind: 'deny', why: 'Content Safety blocks the prompt' },
+      { fail: 0, code: '403', kind: 'deny', why: 'caller IP is outside trusted ranges' }
+    ];
+    async function run(g, sc) {
+      S.reset(); codeT.textContent = '';
+      cap('', 'info', 'IN', 'Request enters the inbound policies');
+      const last = sc.fail < 0 ? 5 : sc.fail;
+      for (let i = 0; i <= last; i++) {
+        await S.move(g, R.inb(i - 1, i), { speed: .2 });
+        if (i === sc.fail) {
+          S.set('p' + i, sc.kind === 'throttle' ? 'hold' : 'bad');
+          cap('', sc.kind, sc.code, sc.why);
+          await S.wait(g, 500);
+          const c = sc.kind === 'throttle' ? C.o : C.r;
+          await S.move(g, R.deny(i), { c });
+          S.set('p-err', sc.kind === 'throttle' ? 'hold' : 'bad');
+          await S.move(g, R.denyBack, { c });
+          codeT.textContent = sc.code; codeT.setAttribute('fill', c);
+          S.set('p-cli', sc.kind === 'throttle' ? 'hold' : 'bad');
+          return;
+        }
+        S.set('p' + i, 'ok');
+        await S.wait(g, 180);
+      }
+      cap('', 'allow', 'BACKEND', 'All inbound checks pass; request forwarded');
+      await S.move(g, R.toBk); S.set('p-bk', 'ok');
+      await S.wait(g, 400);
+      cap('', 'allow', 'OUT', 'Response passes outbound policies');
+      const outRun = S.move(g, 'M790 223 L94 223', { speed: .16 });
+      const marks = [[2, 1100], [1, 2400], [0, 3700]];
+      marks.forEach(([q, t]) => setTimeout(() => { if (g === S.gen) S.set('q' + q, 'ok'); }, reduce ? 0 : t));
+      await outRun;
+      marks.forEach(([q]) => S.set('q' + q, 'ok'));
+      codeT.textContent = '200'; codeT.setAttribute('fill', C.g);
+      S.set('p-cli', 'ok');
+      cap('', 'allow', '200', 'Clean, logged response reaches the client');
+    }
+    (async () => {
+      const g = S.gen;
+      try { for (let i = 0; ; i = (i + 1) % SC.length) { await S.whenVisible(g); await run(g, SC[i]); await S.wait(g, 1800); } }
+      catch (e) { if (e !== 'cancel') throw e; }
+    })();
+  }
+
+  // =====================================================================
+  // Diagram 3: MCP session sequence
+  // =====================================================================
+  {
+    const S = new Stage('d3');
+    const B = S.base, N = S.nodes;
+    const L = { A: 110, E: 330, G: 560, M: 820 };
+    const HD = [['A', 'AI agent', 'blue'], ['E', 'Entra ID', 'purple'], ['G', 'APIM gateway', 'white'], ['M', 'MCP server', 'green']];
+    HD.forEach(([k, t, p]) => {
+      line(B, `M${L[k]} 64 L${L[k]} 455`, { c: '#bbb', dash: '4 4' });
+      box(N, { id: 'h' + k, x: L[k] - 70, y: 18, w: 140, h: 44, p, t });
+    });
+    // gateway activation bar
+    const bar = el('rect', { x: L.G - 6, y: 150, width: 12, height: 0, rx: 3, fill: '#DCEAFE', stroke: '#3B82F6', 'stroke-width': 1.2 }, B);
+
+    const MSG = [
+      ['A', 'E', 'token request (auth code + PKCE)', C.p],
+      ['E', 'A', 'access token · aud = APIM', C.p, 1],
+      ['A', 'G', 'initialize', C.g],
+      ['G', 'M', 'initialize + backend credential', C.g],
+      ['M', 'G', 'capabilities · Mcp-Session-Id', C.g, 1],
+      ['G', 'A', 'session ready', C.g, 1],
+      ['A', 'G', 'tools/list', C.g],
+      ['G', 'M', 'tools/list', C.g],
+      ['M', 'G', '12 tools', C.g, 1],
+      ['G', 'A', '4 tools (filtered by policy)', C.b, 1],
+      ['A', 'G', 'tools/call  crm.get_ticket', C.g],
+      ['G', 'M', 'tools/call  (rate-limited, logged)', C.g],
+      ['M', 'G', 'result · SSE stream', C.g, 1],
+      ['G', 'A', 'streamed result', C.g, 1]
+    ];
+    const Y = i => 96 + i * 25;
+    const items = MSG.map(([a, b, label, c, ret], i) => {
+      const g = el('g', { class: 'msg', opacity: 0 }, B);
+      const x1 = L[a], x2 = L[b], dir = x2 > x1 ? 1 : -1;
+      line(g, `M${x1} ${Y(i)} L${x2 - dir * 3} ${Y(i)}`, { c: ret ? '#999' : '#555', mk: 'mk-k', dash: ret ? '5 4' : null });
+      const t = txt(g, (x1 + x2) / 2, Y(i) - 6, label, 's' + (label.includes('/') ? ' mono' : ''), '#333');
+      return { g, d: `M${x1} ${Y(i)} L${x2} ${Y(i)}`, c, i, a, b };
+    });
+    const pol = el('g', { class: 'msg', opacity: 0 }, N);
+    el('rect', { x: L.G + 14, y: 0, width: 138, height: 20, rx: 10, fill: '#DCF5E3' }, pol);
+    const polT = txt(pol, L.G + 83, 14, 'policies ✓', 's', '#14532D'); polT.style.fontWeight = 700;
+
+    async function run(g) {
+      items.forEach(m => m.g.setAttribute('opacity', 0));
+      bar.setAttribute('height', 0); pol.setAttribute('opacity', 0);
+      S.reset();
+      await S.wait(g, 500);
+      for (const m of items) {
+        if (m.b === 'G' && m.a === 'A') {
+          pol.setAttribute('transform', `translate(0 ${Y(m.i) - 17})`);
+          polT.textContent = m.i === 2 ? 'validate-jwt ✓' : m.i === 6 ? 'allow-list filter' : 'rate-limit · safety ✓';
+        }
+        m.g.setAttribute('opacity', .35);
+        S.set('h' + m.a, 'active');
+        const streams = m.i >= 12 ? 3 : 1;
+        const runs = [];
+        for (let k = 0; k < streams; k++) runs.push(S.wait(g, k * 220).then(() => S.move(g, m.d, { c: m.c, r: k ? 4 : 5.5, speed: .32 })));
+        await Promise.all(runs);
+        S.set('h' + m.a, null);
+        m.g.setAttribute('opacity', 1);
+        S.ping('h' + m.b);
+        if (m.a === 'A' && m.b === 'G') pol.setAttribute('opacity', 1);
+        if (m.i >= 2) bar.setAttribute('height', Y(m.i) - Y(2) + 8);
+        await S.wait(g, 260);
+        if (m.a === 'G' && m.b === 'M') pol.setAttribute('opacity', 0);
+      }
+      await S.wait(g, 2600);
+    }
+    bar.setAttribute('y', Y(2) - 4);
+    (async () => {
+      const g = S.gen;
+      try { for (;;) { await S.whenVisible(g); await run(g); } } catch (e) { if (e !== 'cancel') throw e; }
+    })();
+  }
+
+  // =====================================================================
+  // Diagram 4: REST→MCP vs passthrough
+  // =====================================================================
+  {
+    const S = new Stage('d4');
+    const B = S.base, N = S.nodes;
+    group(B, 10, 10, 450, 196, 'REST API exposed as MCP server', { lfill: '#1E3A8A' });
+    group(B, 480, 10, 450, 196, 'Existing MCP server, passthrough', { lfill: '#1E3A8A' });
+
+    box(N, { id: 'r-a', x: 26, y: 80, w: 92, h: 56, p: 'blue', t: 'AI agent', s: 'MCP' });
+    box(N, { id: 'r-g', x: 162, y: 54, w: 146, h: 108, p: 'white', t: 'APIM', s: 'tool  get_order', s2: '↓  GET /orders/{id}' });
+    box(N, { id: 'r-b', x: 350, y: 80, w: 96, h: 56, p: 'green', t: 'REST API', s: 'OpenAPI' });
+    box(N, { id: 'm-a', x: 496, y: 80, w: 92, h: 56, p: 'blue', t: 'AI agent', s: 'MCP' });
+    box(N, { id: 'm-g', x: 632, y: 54, w: 146, h: 108, p: 'white', t: 'APIM', s: 'MCP in  →  MCP out', s2: 'same policies' });
+    box(N, { id: 'm-b', x: 820, y: 80, w: 96, h: 56, p: 'green', t: 'MCP server', s: 'remote' });
+    box(N, { id: 'apic', x: 360, y: 236, w: 220, h: 48, p: 'teal', t: 'Azure API Center', s: 'one catalog of MCP servers' });
+
+    line(B, 'M118 100 L160 100', { c: '#666', mk: 'mk-k' });
+    line(B, 'M308 100 L348 100', { c: '#666', mk: 'mk-k' });
+    line(B, 'M348 118 L310 118', { c: '#aaa', mk: 'mk-k', dash: '4 3' });
+    line(B, 'M160 118 L120 118', { c: '#aaa', mk: 'mk-k', dash: '4 3' });
+    line(B, 'M588 100 L630 100', { c: '#666', mk: 'mk-k' });
+    line(B, 'M778 100 L818 100', { c: '#666', mk: 'mk-k' });
+    line(B, 'M818 118 L780 118', { c: '#aaa', mk: 'mk-k', dash: '4 3' });
+    line(B, 'M630 118 L590 118', { c: '#aaa', mk: 'mk-k', dash: '4 3' });
+    line(B, 'M235 162 L235 260 L358 260', { c: C.t, mk: 'mk-t', dash: '5 4' });
+    line(B, 'M705 162 L705 260 L582 260', { c: C.t, mk: 'mk-t', dash: '5 4' });
+    txt(B, 300, 252, 'register', 's', '#00695C');
+    txt(B, 640, 252, 'register', 's', '#00695C');
+
+    async function left(g) {
+      await S.move(g, 'M118 100 L235 100', { c: C.g });
+      S.set('r-g', 'active'); await S.wait(g, 350); S.set('r-g', 'ok');
+      await S.move(g, 'M235 100 L350 100', { c: C.b });
+      S.set('r-b', 'ok'); await S.wait(g, 300);
+      await S.move(g, 'M350 118 L235 118', { c: C.b, r: 5 });
+      await S.move(g, 'M235 118 L118 118', { c: C.g, r: 5 });
+      S.set('r-a', 'ok');
+    }
+    async function right(g) {
+      await S.wait(g, 500);
+      await S.move(g, 'M588 100 L705 100', { c: C.g });
+      S.set('m-g', 'active'); await S.wait(g, 350); S.set('m-g', 'ok');
+      await S.move(g, 'M705 100 L820 100', { c: C.g });
+      S.set('m-b', 'ok'); await S.wait(g, 300);
+      await S.move(g, 'M820 118 L588 118', { c: C.g, r: 5 });
+      S.set('m-a', 'ok');
+    }
+    (async () => {
+      const g = S.gen;
+      try {
+        for (let n = 0; ; n++) {
+          await S.whenVisible(g);
+          S.reset();
+          if (n % 3 === 0) {
+            await Promise.all([S.move(g, 'M235 162 L235 260 L360 260', { c: C.t, r: 5 }), S.move(g, 'M705 162 L705 260 L580 260', { c: C.t, r: 5 })]);
+            S.set('apic', 'ok'); await S.wait(g, 600); S.reset();
+          }
+          await Promise.all([left(g), right(g)]);
+          await S.wait(g, 1500);
+        }
+      } catch (e) { if (e !== 'cancel') throw e; }
+    })();
+  }
+})();
+</script>
+</body>
+</html>
